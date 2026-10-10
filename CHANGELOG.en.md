@@ -2,6 +2,17 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.1.0] — 2026-10-11
+
+### Changed
+
+- How changes are made to a project (a direct push or a branch and a PR, branch naming, deploy) lives in the project's own `CLAUDE.md`, not in the harness registry. The `push` skill checks the project rules before pushing; if they do not describe it, it asks the owner and offers to record the answer in the project.
+- The `repo-add` skill no longer fills in the `flow` field and looks for the workflow in the project rules.
+
+### Removed
+
+- The `flow` field from the `registry/repos.json` entries.
+
 ## [1.0.0] — 2026-10-10
 
 The first public release, under the MIT license. The harness core is separated from the owner's data, so the same version works both as a personal install and as an open project.
