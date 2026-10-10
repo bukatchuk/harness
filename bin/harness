@@ -1,0 +1,1493 @@
+#!/usr/bin/env bash
+# harness — CLI: setup, environment check, registries, language sets, Docker, public release.
+# Dependencies: bash 3.2+, git, jq. Everything deterministic lives here, not in the rules.
+# Every user-facing message is written as a pair: Russian first, English second.
+set -u
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CONF="$ROOT/harness.json"
+REGISTRY="$ROOT/registry/repos.json"
+SERVERS="$ROOT/registry/servers.json"
+SERVICES="$ROOT/registry/services.json"
+REPOS_DIR="$ROOT/repos"
+I18N="$ROOT/i18n"
+ACTIVE="$ROOT/.claude"
+SETTINGS="$ACTIVE/settings.json"
+LOCAL_SETTINGS="$ACTIVE/settings.local.json"
+MANIFEST="$ACTIVE/.harness-files"
+BACKUP_DIR="$ROOT/.harness-backup"
+DIST="$ROOT/dist"
+
+# How often a running session checks origin for a new version, in seconds.
+UPDATE_CHECK_INTERVAL=900
+
+# AI attribution markers that are forbidden in commits and PRs.
+AI_MARKERS='co-authored-by:.*(claude|anthropic|copilot|openai|codex|cursor|gemini)|generated with.*(claude|codex|cursor|copilot|gemini)|noreply@anthropic\.com|🤖'
+
+# Marker of the block that the public build appends to .gitignore.
+IGNORE_MARK='# harness: user data'
+
+# --- settings and language ----------------------------------------------------
+
+# Value from harness.json; empty when the file, the key or jq is missing.
+conf() {
+  [ -f "$CONF" ] && command -v jq >/dev/null 2>&1 || return 0
+  jq -r "$1 // empty" "$CONF" 2>/dev/null
+}
+
+detect_lang() {
+  local l="${HARNESS_LANG:-}"
+  [ -n "$l" ] || l="$(conf '.lang')"
+  if [ -z "$l" ]; then
+    case "${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}" in ru*) l=ru ;; *) l=en ;; esac
+  fi
+  case "$l" in ru|en) echo "$l" ;; *) echo en ;; esac
+}
+HLANG="$(detect_lang)"
+
+# t "<русский>" "<english>" — the string in the current language.
+t()   { if [ "$HLANG" = ru ]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }
+say() { t "$1" "$2"; echo; }
+err() { say "$1" "$2" >&2; }
+
+need_jq() { command -v jq >/dev/null 2>&1 || { err "нужен jq" "jq is required"; exit 1; }; }
+
+integration_on() { [ -n "$(conf ".integrations.$1")" ]; }
+
+usage() {
+  if [ "$HLANG" = ru ]; then cat <<'EOF'
+Использование: bin/harness <команда>
+
+Настройка
+  init [--name И --email П --lang ru|en --yes]   первичная настройка: владелец, язык, git-хуки
+  lang [ru|en]             показать или сменить язык правил, skills и сообщений
+  version                  версия harness и наличие обновления в origin
+  doctor [--deep]          проверка окружения; --deep — с реальными запросами к API
+  selfcheck                проверка целостности самого harness (для CI и перед релизом)
+
+Реестр
+  sync [имя]               клонировать и обновить репозитории из реестра
+  status                   состояние клонов в repos/
+  servers                  список серверов из реестра
+  server-check [имя]       проверить вход на серверы по SSH
+  map [имя]                связи: какой репозиторий настраивает какие серверы и сервисы
+  repo-remove <имя> [--unlink] [--delete-clone] [--force]
+                           удалить репозиторий из реестра
+  server-remove <имя> [--unlink]
+                           удалить сервер из реестра
+  service-remove <имя>     удалить связь из реестра
+  reset [--delete-clones] [--force] [--yes]
+                           очистить реестр; без --yes только показывает план
+
+Git и Docker
+  check-commits [путь]     проверить неотправленные коммиты: автор и AI-атрибуция
+  docker-up                запустить демон Docker и дождаться готовности
+  docker-check             показать ресурсы Docker, оставшиеся от harness
+  docker-clean             удалить ресурсы Docker, созданные harness
+
+Публичный релиз
+  release-build [--preview]   собрать открытую версию без данных владельца и проверить на утечки
+  release-publish [--push]    показать или отправить релиз в публичный репозиторий
+EOF
+  else cat <<'EOF'
+Usage: bin/harness <command>
+
+Setup
+  init [--name N --email E --lang ru|en --yes]   first-time setup: owner, language, git hooks
+  lang [ru|en]             show or switch the language of rules, skills and messages
+  version                  harness version and whether origin has an update
+  doctor [--deep]          environment check; --deep makes real API requests
+  selfcheck                integrity check of harness itself (for CI and before a release)
+
+Registry
+  sync [name]              clone and update repositories from the registry
+  status                   state of the clones in repos/
+  servers                  list servers from the registry
+  server-check [name]      check SSH login to the servers
+  map [name]               links: which repository configures which servers and services
+  repo-remove <name> [--unlink] [--delete-clone] [--force]
+                           remove a repository from the registry
+  server-remove <name> [--unlink]
+                           remove a server from the registry
+  service-remove <name>    remove a link from the registry
+  reset [--delete-clones] [--force] [--yes]
+                           empty the registry; without --yes it only prints the plan
+
+Git and Docker
+  check-commits [path]     check unpushed commits: author and AI attribution
+  docker-up                start the Docker daemon and wait until it is ready
+  docker-check             show Docker resources left behind by harness
+  docker-clean             remove Docker resources created by harness
+
+Public release
+  release-build [--preview]   build the open version without owner data and scan it for leaks
+  release-publish [--push]    preview or push the release to the public repository
+EOF
+  fi
+}
+
+# --- version ------------------------------------------------------------------
+
+local_version() { tr -d '[:space:]' < "$ROOT/VERSION"; }
+
+default_branch() {
+  local b
+  b="$(git -C "$ROOT" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')"
+  echo "${b:-main}"
+}
+
+# git fetch with a time limit: session start must not hang without a network.
+# A normal fetch from GitHub over SSH takes 4–5 seconds, so a limit under 10 gives a false "no updates".
+# Returns non-zero when the fetch did not finish or failed.
+fetch_origin() {
+  local secs="${1:-20}" pid
+  git -C "$ROOT" fetch --quiet origin >/dev/null 2>&1 &
+  pid=$!
+  ( sleep "$secs"; kill "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  wait "$pid" 2>/dev/null
+}
+
+version_line() {
+  local sha dirty=""
+  sha="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || t 'нет git' 'no git')"
+  [ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ] && dirty="$(t ', есть незакоммиченные изменения' ', uncommitted changes')"
+  echo "harness v$(local_version) ($sha$dirty)"
+}
+
+# Prints a line about the update when origin is ahead.
+update_line() {
+  local branch behind remote_v
+  branch="$(default_branch)"
+  behind="$(git -C "$ROOT" rev-list --count "HEAD..origin/$branch" 2>/dev/null || echo 0)"
+  [ "$behind" -gt 0 ] 2>/dev/null || return 0
+  remote_v="$(git -C "$ROOT" show "origin/$branch:VERSION" 2>/dev/null | tr -d '[:space:]')"
+  say "доступно обновление: v${remote_v:-?} (коммитов: $behind) — skill harness-update" \
+      "update available: v${remote_v:-?} (commits: $behind) — skill harness-update"
+}
+
+# $1 > $2 for versions of the form X.Y.Z
+ver_gt() {
+  local IFS=. i
+  # shellcheck disable=SC2206  # split by IFS on purpose
+  local a=($1) b=($2)
+  for i in 0 1 2; do
+    [ "${a[i]:-0}" -gt "${b[i]:-0}" ] && return 0
+    [ "${a[i]:-0}" -lt "${b[i]:-0}" ] && return 1
+  done
+  return 1
+}
+
+# Session state file: time of the last check and the sha that was already announced.
+state_file() {
+  local dir sid
+  dir="$(git -C "$ROOT" rev-parse --absolute-git-dir 2>/dev/null)/harness"
+  mkdir -p "$dir" 2>/dev/null
+  sid="$(printf '%s' "${1:-default}" | tr -cd 'A-Za-z0-9_-')"
+  echo "$dir/update-check-${sid:-default}"
+}
+
+cmd_version() {
+  local fetched=1
+  fetch_origin 30 || fetched=0
+  version_line
+  update_line
+  if [ "$fetched" -eq 0 ]; then
+    say "origin недоступен: сведения об обновлении могут быть устаревшими (проверь сеть и доступ: git fetch origin)" \
+        "origin is unreachable: update information may be stale (check the network and access: git fetch origin)"
+    return 1
+  fi
+}
+
+# --- tables -------------------------------------------------------------------
+
+US=$'\x1f'
+
+# String width in characters, not bytes, under any locale: UTF-8 continuation bytes are not counted.
+char_len() {
+  local LC_ALL=C s="$1"
+  s="${s//[$'\x80'-$'\xbf']/}"
+  echo "${#s}"
+}
+
+# Reads rows with fields separated by $US (the first row is the header) and prints an aligned table.
+# The last column is not padded: it may hold long text.
+print_table() {
+  local line cell i n=0 cols=0 len out
+  local -a rows widths cells
+  while IFS= read -r line; do
+    rows[n]="$line"; n=$((n + 1))
+    IFS="$US" read -ra cells <<< "$line"
+    [ "${#cells[@]}" -le "$cols" ] || cols="${#cells[@]}"
+    for i in "${!cells[@]}"; do
+      len="$(char_len "${cells[i]}")"
+      [ "$len" -le "${widths[i]:-0}" ] || widths[i]="$len"
+    done
+  done
+  [ "$n" -gt 0 ] || return 0
+  for line in "${rows[@]}"; do
+    IFS="$US" read -ra cells <<< "$line"
+    out=""
+    for ((i = 0; i < cols; i++)); do
+      cell="${cells[i]:-}"
+      if [ "$i" -eq $((cols - 1)) ]; then
+        out+="$cell"
+      else
+        out+="$(printf '%s%*s' "$cell" $((widths[i] - $(char_len "$cell") + 2)) '')"
+      fi
+    done
+    echo "  $out"
+  done
+}
+
+# "  <label padded to 12 characters> <text>"
+row() { printf '  %s%*s %s\n' "$1" $((12 - $(char_len "$1"))) '' "$2"; }
+
+# --- registry files -----------------------------------------------------------
+
+# A fresh install has no registry yet: an absent file means an empty registry.
+ensure_data() {
+  mkdir -p "$ROOT/registry" 2>/dev/null
+  [ -f "$REGISTRY" ] || echo '{"repos": []}' > "$REGISTRY"
+  [ -f "$SERVERS" ]  || echo '{"servers": []}' > "$SERVERS"
+  [ -f "$SERVICES" ] || echo '{"services": []}' > "$SERVICES"
+}
+
+need_registry() {
+  need_jq; ensure_data
+  jq -e '.repos | type == "array"' "$REGISTRY" >/dev/null 2>&1 || { err "registry/repos.json повреждён" "registry/repos.json is corrupted"; exit 1; }
+}
+need_servers() {
+  need_jq; ensure_data
+  jq -e '.servers | type == "array"' "$SERVERS" >/dev/null 2>&1 || { err "registry/servers.json повреждён" "registry/servers.json is corrupted"; exit 1; }
+}
+need_services() {
+  need_jq; ensure_data
+  jq -e '.services | type == "array"' "$SERVICES" >/dev/null 2>&1 || { err "registry/services.json повреждён" "registry/services.json is corrupted"; exit 1; }
+}
+
+# json_edit <file> <jq arguments…> — rewrites the file in place, keeping its permissions.
+json_edit() {
+  local file="$1" tmp
+  shift
+  tmp="$(mktemp "${TMPDIR:-/tmp}/harness.XXXXXX")" || return 1
+  if jq "$@" "$file" > "$tmp"; then
+    cat "$tmp" > "$file"; rm -f "$tmp"
+  else
+    rm -f "$tmp"; return 1
+  fi
+}
+
+# Copies the three registry files aside before any destructive change. Prints the directory.
+backup_registry() {
+  local dir
+  dir="$BACKUP_DIR/$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$dir" && cp "$REGISTRY" "$SERVERS" "$SERVICES" "$dir/" 2>/dev/null
+  echo "${dir#"$ROOT"/}"
+}
+
+# A registry name is used as a directory name: no slashes, no dots-only, no leading dash.
+valid_name() {
+  case "${1:-}" in ""|.|..|*/*|-*) return 1 ;; esac
+  return 0
+}
+
+# --- language sets ------------------------------------------------------------
+
+lang_files() { (cd "$I18N/$1" 2>/dev/null && find . -type f -name '*.md' | sed 's|^\./||' | LC_ALL=C sort); }
+
+# True when .claude/ does not match i18n/<lang>: nothing deployed yet, another language, or edited sources.
+lang_stale() {
+  local src="$I18N/$1" f
+  [ -d "$src" ] || return 1
+  [ -f "$MANIFEST" ] || return 0
+  [ "$(lang_files "$1")" = "$(cat "$MANIFEST")" ] || return 0
+  while IFS= read -r f; do
+    cmp -s "$src/$f" "$ACTIVE/$f" || return 0
+  done < "$MANIFEST"
+  return 1
+}
+
+# Copies i18n/<lang> into .claude/. Removes only the files it deployed before: the user's own rules and skills stay.
+apply_lang() {
+  local lang="$1" src="$I18N/$1" f
+  [ -d "$src" ] || return 1
+  mkdir -p "$ACTIVE"
+  if [ -f "$MANIFEST" ]; then
+    while IFS= read -r f; do
+      [ -n "$f" ] && rm -f "$ACTIVE/$f"
+    done < "$MANIFEST"
+  fi
+  lang_files "$lang" > "$MANIFEST"
+  while IFS= read -r f; do
+    mkdir -p "$ACTIVE/$(dirname "$f")" && cp "$src/$f" "$ACTIVE/$f"
+  done < "$MANIFEST"
+  find "$ACTIVE/rules" "$ACTIVE/skills" "$ACTIVE/integrations" -type d -empty -delete 2>/dev/null
+  return 0
+}
+
+# Files that exist in one language set only.
+i18n_mismatch() {
+  local f
+  for f in $(lang_files ru); do [ -f "$I18N/en/$f" ] || echo "i18n/ru/$f"; done
+  for f in $(lang_files en); do [ -f "$I18N/ru/$f" ] || echo "i18n/en/$f"; done
+}
+
+cmd_lang() {
+  need_jq
+  local want="${1:-}"
+  if [ -n "$want" ]; then
+    case "$want" in
+      ru|en) ;;
+      *) err "неизвестный язык: $want (есть ru и en)" "unknown language: $want (ru and en are available)"; return 1 ;;
+    esac
+    [ -f "$CONF" ] || echo '{}' > "$CONF"
+    json_edit "$CONF" --arg l "$want" '.lang = $l' || return 1
+    HLANG="$want"
+  fi
+  apply_lang "$HLANG" || { err "нет комплекта i18n/$HLANG" "language set i18n/$HLANG is missing"; return 1; }
+  say "язык: $HLANG — правила, skills и шпаргалки развёрнуты в .claude/ ($(grep -c . "$MANIFEST") файлов)" \
+      "language: $HLANG — rules, skills and cheat sheets are deployed to .claude/ ($(grep -c . "$MANIFEST") files)"
+  [ -z "$want" ] || say "В работающей сессии Claude Code правила перечитаются после перезапуска." \
+                        "A running Claude Code session picks up the rules after a restart."
+}
+
+# --- owner identity -----------------------------------------------------------
+
+# Pins the commit author from harness.json in .claude/settings.local.json.
+# Returns 0 — already pinned, 2 — just written, 1 — owner is not configured or the file is broken.
+apply_identity() {
+  local name email cur
+  name="$(conf '.owner.name')"; email="$(conf '.owner.email')"
+  [ -n "$name" ] && [ -n "$email" ] || return 1
+  mkdir -p "$ACTIVE"
+  [ -f "$LOCAL_SETTINGS" ] || echo '{}' > "$LOCAL_SETTINGS"
+  cur="$(jq -r '[.env.GIT_AUTHOR_NAME, .env.GIT_AUTHOR_EMAIL, .env.GIT_COMMITTER_NAME, .env.GIT_COMMITTER_EMAIL] | map(. // "") | join("|")' "$LOCAL_SETTINGS" 2>/dev/null)" || return 1
+  [ "$cur" = "$name|$email|$name|$email" ] && return 0
+  json_edit "$LOCAL_SETTINGS" --arg n "$name" --arg e "$email" \
+    '.env = ((.env // {}) + {GIT_AUTHOR_NAME: $n, GIT_AUTHOR_EMAIL: $e, GIT_COMMITTER_NAME: $n, GIT_COMMITTER_EMAIL: $e})' || return 1
+  return 2
+}
+
+# --- init ---------------------------------------------------------------------
+
+# ask "<prompt>" "<default>" — reads an answer from the terminal, even when stdin is a pipe (curl | bash).
+ask() {
+  local answer
+  printf '%s [%s]: ' "$1" "$2" > /dev/tty
+  IFS= read -r answer < /dev/tty || answer=""
+  echo "${answer:-$2}"
+}
+
+cmd_init() {
+  need_jq
+  local name="" email="" lang="" yes=0 interactive=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --name)  name="${2:-}"; shift ;;
+      --email) email="${2:-}"; shift ;;
+      --lang)  lang="${2:-}"; shift ;;
+      --yes|-y) yes=1 ;;
+      *) err "неизвестный параметр: $1" "unknown option: $1"; return 1 ;;
+    esac
+    shift
+  done
+  [ -n "$name" ]  || name="$(conf '.owner.name')"
+  [ -n "$email" ] || email="$(conf '.owner.email')"
+  [ -n "$name" ]  || name="$(git config --global user.name 2>/dev/null)"
+  [ -n "$email" ] || email="$(git config --global user.email 2>/dev/null)"
+  [ -n "$lang" ]  || lang="$HLANG"
+
+  if [ "$yes" -eq 0 ] && { : < /dev/tty; } 2>/dev/null; then interactive=1; fi
+  if [ "$interactive" -eq 1 ]; then
+    lang="$(ask 'Язык / Language (ru, en)' "$lang")"
+    case "$lang" in ru|en) HLANG="$lang" ;; esac
+    name="$(ask "$(t 'Имя автора коммитов' 'Commit author name')" "$name")"
+    email="$(ask "$(t 'Почта автора коммитов' 'Commit author email')" "$email")"
+  fi
+
+  case "$lang" in
+    ru|en) HLANG="$lang" ;;
+    *) err "язык должен быть ru или en" "language must be ru or en"; return 1 ;;
+  esac
+  if [ -z "$name" ]; then
+    err "не задано имя автора: bin/harness init --name \"Имя Фамилия\" --email you@example.com" \
+        "author name is missing: bin/harness init --name \"First Last\" --email you@example.com"
+    return 1
+  fi
+  case "$email" in
+    ?*@?*.?*) ;;
+    *) err "почта автора не задана или записана неверно: --email you@example.com" \
+           "author email is missing or malformed: --email you@example.com"; return 1 ;;
+  esac
+
+  [ -f "$CONF" ] || echo '{}' > "$CONF"
+  json_edit "$CONF" --arg n "$name" --arg e "$email" --arg l "$lang" \
+    '{owner: {name: $n, email: $e}, lang: $l, integrations: (.integrations // {})} + (del(.owner, .lang, .integrations))' || return 1
+  ensure_data
+  apply_identity; [ $? -ne 1 ] || { err "не удалось записать .claude/settings.local.json" "could not write .claude/settings.local.json"; return 1; }
+  apply_lang "$lang" || { err "нет комплекта i18n/$lang" "language set i18n/$lang is missing"; return 1; }
+  git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1 && git -C "$ROOT" config --local core.hooksPath .githooks
+
+  say "harness настроен:" "harness is set up:"
+  row "$(t 'владелец' 'owner')" "$name <$email>"
+  row "$(t 'язык' 'language')" "$lang"
+  row "$(t 'правила' 'rules')" "$(t "развёрнуты в .claude/ ($(grep -c . "$MANIFEST") файлов)" "deployed to .claude/ ($(grep -c . "$MANIFEST") files)")"
+  echo
+  say "Дальше:" "Next:"
+  say "  bin/harness doctor     — чего не хватает в окружении" "  bin/harness doctor     — what the environment is missing"
+  say "  claude                 — запускать из корня harness: $ROOT" "  claude                 — start it from the harness root: $ROOT"
+  say "  /repo-add <git-url>    — добавить первый проект" "  /repo-add <git-url>    — add your first project"
+}
+
+# --- doctor -------------------------------------------------------------------
+
+ERRORS=0
+WARNINGS=0
+QUIET=0
+ok()   { [ "$QUIET" -eq 1 ] || echo "  ok    $*"; }
+warn() { echo "  warn  $*"; WARNINGS=$((WARNINGS + 1)); }
+fail() { echo "  FAIL  $*"; ERRORS=$((ERRORS + 1)); }
+section() { [ "$QUIET" -eq 1 ] || echo "$*"; }
+
+# The token goes to curl through a file descriptor, not an argument: it is not visible in ps.
+http_check() {
+  local name="$1" url="$2" header="$3" code
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H @<(printf '%s' "$header") "$url" 2>/dev/null)"
+  case "$code" in
+    2*)  ok "$name: HTTP $code" ;;
+    000) fail "$name: $(t "нет соединения с $url" "no connection to $url")" ;;
+    *)   fail "$name: HTTP $code ($url)" ;;
+  esac
+}
+
+harness_containers() {
+  docker ps -aq --filter label=harness=1 2>/dev/null
+  docker ps -a --format '{{.ID}} {{.Label "com.docker.compose.project"}}' 2>/dev/null | awk '$2 ~ /^harness-/ {print $1}'
+}
+harness_networks() {
+  docker network ls -q --filter label=harness=1 2>/dev/null
+  docker network ls --format '{{.ID}} {{.Label "com.docker.compose.project"}}' 2>/dev/null | awk '$2 ~ /^harness-/ {print $1}'
+}
+harness_volumes() {
+  docker volume ls -q --filter label=harness=1 2>/dev/null
+  docker volume ls --format '{{.Name}} {{.Label "com.docker.compose.project"}}' 2>/dev/null | awk '$2 ~ /^harness-/ {print $1}'
+}
+harness_images() { docker images -q --filter label=harness=1 2>/dev/null; }
+
+cmd_doctor() {
+  local deep=0 arg tool v
+  for arg in "$@"; do
+    case "$arg" in
+      --deep)  deep=1 ;;
+      --quiet) QUIET=1 ;;
+    esac
+  done
+
+  section "$(t 'Утилиты' 'Tools')"
+  for tool in git jq curl; do
+    if command -v "$tool" >/dev/null 2>&1; then ok "$tool"; else fail "$tool $(t 'не установлен' 'is not installed')"; fi
+  done
+  for tool in gh docker; do
+    if command -v "$tool" >/dev/null 2>&1; then ok "$tool"; else warn "$tool $(t 'не установлен' 'is not installed')"; fi
+  done
+  if integration_on yandex_cloud; then
+    if command -v yc >/dev/null 2>&1; then ok "yc"; else warn "yc $(t 'не установлен (см. .claude/integrations/yandex-cloud.md)' 'is not installed (see .claude/integrations/yandex-cloud.md)')"; fi
+  fi
+  if integration_on gitguardian; then
+    if command -v ggshield >/dev/null 2>&1; then ok "ggshield"; else warn "ggshield $(t 'не установлен (см. .claude/integrations/gitguardian.md)' 'is not installed (see .claude/integrations/gitguardian.md)')"; fi
+  fi
+  command -v jq >/dev/null 2>&1 || { say "Итог: без jq проверка невозможна" "Result: nothing can be checked without jq"; return 1; }
+
+  section "$(t 'Настройка' 'Setup')"
+  local owner_name owner_email
+  owner_name="$(conf '.owner.name')"; owner_email="$(conf '.owner.email')"
+  if [ -n "$owner_name" ] && [ -n "$owner_email" ]; then
+    ok "$(t 'владелец' 'owner'): $owner_name <$owner_email>"
+    apply_identity
+    case $? in
+      0) ok "$(t 'автор коммитов закреплён' 'commit author is pinned')" ;;
+      2) warn "$(t 'автор коммитов только что записан в .claude/settings.local.json — он начнёт действовать в новой сессии' 'commit author was just written to .claude/settings.local.json — it takes effect in a new session')" ;;
+      *) fail "$(t 'не удалось записать автора в .claude/settings.local.json' 'could not write the author to .claude/settings.local.json')" ;;
+    esac
+  else
+    fail "$(t 'harness не настроен: bin/harness init' 'harness is not set up: bin/harness init')"
+  fi
+  if [ ! -d "$I18N/$HLANG" ]; then
+    fail "$(t "нет комплекта i18n/$HLANG" "language set i18n/$HLANG is missing")"
+  elif lang_stale "$HLANG"; then
+    warn "$(t "правила в .claude/ не совпадают с i18n/$HLANG: bin/harness lang" "rules in .claude/ differ from i18n/$HLANG: bin/harness lang")"
+  else
+    ok "$(t "язык: $HLANG, правила развёрнуты" "language: $HLANG, rules are deployed")"
+  fi
+  while IFS= read -r v; do
+    [ -z "$v" ] || fail "$(t "$v — нет пары на втором языке" "$v — has no counterpart in the other language")"
+  done <<< "$(i18n_mismatch)"
+
+  section "$(t 'Интеграции (только наличие токенов, значения не читаются)' 'Integrations (token presence only, values are not read)')"
+  local any=0
+  if integration_on plane; then any=1
+    if [ -n "${PLANE_TOKEN:-}" ]; then ok "PLANE_TOKEN"; else warn "PLANE_TOKEN $(t 'не задан в окружении' 'is not set in the environment')"; fi
+    [ -n "$(conf '.integrations.plane.url')" ] || fail "$(t 'в harness.json нет integrations.plane.url' 'harness.json has no integrations.plane.url')"
+  fi
+  if integration_on n8n; then any=1
+    if [ -n "${N8N_TOKEN:-}" ]; then ok "N8N_TOKEN"; else warn "N8N_TOKEN $(t 'не задан в окружении' 'is not set in the environment')"; fi
+    [ -n "$(conf '.integrations.n8n.url')" ] || fail "$(t 'в harness.json нет integrations.n8n.url' 'harness.json has no integrations.n8n.url')"
+  fi
+  if integration_on gitguardian; then any=1
+    if [ -n "${GITGUARDIAN_TOKEN:-}" ]; then ok "GITGUARDIAN_TOKEN"; else warn "GITGUARDIAN_TOKEN $(t 'не задан в окружении' 'is not set in the environment')"; fi
+  fi
+  if integration_on yandex_cloud && command -v yc >/dev/null 2>&1; then any=1
+    if yc config profile list 2>/dev/null | grep -q ' ACTIVE$'; then ok "$(t 'профиль yc' 'yc profile')"; else warn "$(t 'нет активного профиля yc (вход: yc init)' 'no active yc profile (log in: yc init)')"; fi
+  fi
+  [ "$any" -eq 1 ] || ok "$(t 'не подключены (ключ integrations в harness.json)' 'none enabled (the integrations key in harness.json)')"
+
+  section "Git / GitHub"
+  if [ "$(git -C "$ROOT" config --local core.hooksPath 2>/dev/null)" = ".githooks" ]; then
+    ok "$(t 'git-хуки harness включены (контроль версии)' 'harness git hooks are enabled (version control)')"
+  else
+    warn "$(t 'git-хуки harness не включены: bin/harness init' 'harness git hooks are not enabled: bin/harness init')"
+  fi
+  if command -v gh >/dev/null 2>&1; then
+    if gh auth token >/dev/null 2>&1; then ok "$(t 'gh авторизован' 'gh is authenticated')"; else warn "$(t 'gh не авторизован: gh auth login' 'gh is not authenticated: gh auth login')"; fi
+  fi
+
+  if command -v docker >/dev/null 2>&1; then
+    section "Docker"
+    if docker info >/dev/null 2>&1; then
+      ok "$(t 'демон запущен' 'the daemon is running')"
+      local left
+      left="$( { harness_containers; harness_networks; harness_volumes; } | sort -u | grep -c . )"
+      if [ "$left" -gt 0 ]; then
+        warn "$(t "от прошлых запусков остались ресурсы harness ($left): bin/harness docker-clean" "harness resources are left from earlier runs ($left): bin/harness docker-clean")"
+      fi
+    else
+      ok "$(t 'демон остановлен (запуск при необходимости: bin/harness docker-up)' 'the daemon is stopped (start it when needed: bin/harness docker-up)')"
+    fi
+  fi
+
+  section "$(t 'Реестр' 'Registry')"
+  ensure_data
+  if ! jq -e '.repos | type == "array"' "$REGISTRY" >/dev/null 2>&1; then
+    fail "$(t 'registry/repos.json повреждён' 'registry/repos.json is corrupted')"
+  else
+    local total missing=0 name
+    total="$(jq '.repos | length' "$REGISTRY")"
+    while IFS= read -r name; do
+      [ -z "$name" ] || [ -d "$REPOS_DIR/$name/.git" ] || missing=$((missing + 1))
+    done < <(jq -r '.repos[].name' "$REGISTRY")
+    if [ "$missing" -gt 0 ]; then
+      warn "$(t "не склонировано репозиториев: $missing из $total — bin/harness sync" "repositories not cloned: $missing of $total — bin/harness sync")"
+    else
+      ok "$(t "репозиториев в реестре: $total, все на месте" "repositories in the registry: $total, all cloned")"
+    fi
+    if jq -e '.servers | type == "array"' "$SERVERS" >/dev/null 2>&1; then
+      ok "$(t 'серверов в реестре' 'servers in the registry'): $(jq '.servers | length' "$SERVERS")"
+    else
+      fail "$(t 'registry/servers.json повреждён' 'registry/servers.json is corrupted')"
+    fi
+    if jq -e '.services | type == "array"' "$SERVICES" >/dev/null 2>&1; then
+      local broken
+      broken="$(broken_links)"
+      if [ -n "$broken" ]; then
+        while IFS= read -r v; do fail "$(t 'связи' 'links'): $v"; done <<< "$broken"
+      else
+        ok "$(t "связей в реестре: $(jq '.services | length' "$SERVICES"), ссылки целы" "links in the registry: $(jq '.services | length' "$SERVICES"), references are intact")"
+      fi
+    else
+      fail "$(t 'registry/services.json повреждён' 'registry/services.json is corrupted')"
+    fi
+  fi
+
+  if [ "$deep" -eq 1 ]; then
+    section "$(t 'Доступы (реальные запросы)' 'Access (real requests)')"
+    if git -C "$ROOT" ls-remote --exit-code origin HEAD >/dev/null 2>&1; then
+      ok "$(t 'origin harness доступен' 'harness origin is reachable')"
+    else
+      fail "$(t 'origin harness недоступен' 'harness origin is unreachable')"
+    fi
+    local url
+    url="$(conf '.integrations.plane.url')"
+    [ -n "$url" ] && [ -n "${PLANE_TOKEN:-}" ] && http_check "Plane" "${url%/}/api/v1/users/me/" "X-API-Key: $PLANE_TOKEN"
+    url="$(conf '.integrations.n8n.url')"
+    [ -n "$url" ] && [ -n "${N8N_TOKEN:-}" ] && http_check "n8n" "${url%/}/api/v1/workflows?limit=1" "X-N8N-API-KEY: $N8N_TOKEN"
+    integration_on gitguardian && [ -n "${GITGUARDIAN_TOKEN:-}" ] && http_check "GitGuardian" "https://api.gitguardian.com/v1/health" "Authorization: Token $GITGUARDIAN_TOKEN"
+    if integration_on yandex_cloud && command -v yc >/dev/null 2>&1 && yc config profile list 2>/dev/null | grep -q ' ACTIVE$'; then
+      if yc resource-manager cloud list --format json >/dev/null 2>&1; then
+        ok "Yandex Cloud: $(t 'доступ есть' 'access works')"
+      else
+        fail "Yandex Cloud: $(t 'запрос не прошёл (yc resource-manager cloud list); вход устарел — yc init' 'the request failed (yc resource-manager cloud list); the login expired — yc init')"
+      fi
+    fi
+    section "$(t 'Серверы (SSH)' 'Servers (SSH)')"
+    check_servers ""
+  fi
+
+  if [ "$QUIET" -eq 0 ]; then
+    say "Итог: ошибок $ERRORS, предупреждений $WARNINGS" "Result: errors $ERRORS, warnings $WARNINGS"
+  fi
+  [ "$ERRORS" -eq 0 ]
+}
+
+# --- repositories -------------------------------------------------------------
+
+cmd_sync() {
+  need_registry
+  local only="${1:-}" name url branch dir rc=0
+  mkdir -p "$REPOS_DIR"
+  while IFS=$'\t' read -r name url branch; do
+    [ -n "$name" ] || continue
+    [ -z "$only" ] || [ "$only" = "$name" ] || continue
+    dir="$REPOS_DIR/$name"
+    if [ ! -d "$dir/.git" ]; then
+      if git clone --quiet ${branch:+--branch "$branch"} "$url" "$dir"; then
+        row "$(t 'клонирован' 'cloned')" "$name"
+      else
+        row "$(t 'ОШИБКА' 'ERROR')" "$name: $(t "не удалось клонировать $url" "could not clone $url")"; rc=1
+      fi
+      continue
+    fi
+    if ! git -C "$dir" fetch --quiet --prune origin; then
+      row "$(t 'ОШИБКА' 'ERROR')" "$name: $(t 'fetch не прошёл' 'fetch failed')"; rc=1
+      continue
+    fi
+    # Local work is never touched: only a clean tree is updated and only by fast-forward.
+    if [ -n "$(git -C "$dir" status --porcelain)" ]; then
+      row "$(t 'только fetch' 'fetch only')" "$name: $(t 'есть незакоммиченные изменения' 'there are uncommitted changes')"
+    elif ! git -C "$dir" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
+      row "$(t 'только fetch' 'fetch only')" "$name: $(t 'у текущей ветки нет upstream' 'the current branch has no upstream')"
+    elif git -C "$dir" merge --quiet --ff-only '@{u}' >/dev/null 2>&1; then
+      row "$(t 'обновлён' 'updated')" "$name ($(git -C "$dir" rev-parse --abbrev-ref HEAD))"
+    else
+      row "$(t 'только fetch' 'fetch only')" "$name: $(t 'ветка разошлась с upstream' 'the branch has diverged from upstream')"
+    fi
+  done < <(jq -r '.repos[] | [.name, .url, (.branch // "")] | @tsv' "$REGISTRY")
+  return "$rc"
+}
+
+cmd_status() {
+  need_registry
+  local name dir branch dirty ahead behind
+  [ "$(jq '.repos | length' "$REGISTRY")" -gt 0 ] || { say "  реестр репозиториев пуст" "  the repository registry is empty"; return 0; }
+  {
+    t "РЕПОЗИТОРИЙ${US}ВЕТКА${US}ИЗМЕНЕНО${US}ВПЕРЕДИ${US}ПОЗАДИ" "REPOSITORY${US}BRANCH${US}MODIFIED${US}AHEAD${US}BEHIND"; echo
+    while IFS= read -r name; do
+      dir="$REPOS_DIR/$name"
+      if [ ! -d "$dir/.git" ]; then
+        echo "$name${US}$(t 'не склонирован' 'not cloned')${US}-${US}-${US}-"
+        continue
+      fi
+      branch="$(git -C "$dir" rev-parse --abbrev-ref HEAD)"
+      dirty="$(git -C "$dir" status --porcelain | grep -c .)"
+      ahead="$(git -C "$dir" rev-list --count '@{u}..HEAD' 2>/dev/null || echo '?')"
+      behind="$(git -C "$dir" rev-list --count 'HEAD..@{u}' 2>/dev/null || echo '?')"
+      echo "$name${US}$branch${US}$dirty${US}$ahead${US}$behind"
+    done < <(jq -r '.repos[].name' "$REGISTRY")
+  } | print_table
+}
+
+# Unsaved work in a clone: "<modified files> <commits on no remote> <stashes>".
+clone_work() {
+  local dir="$1"
+  echo "$(git -C "$dir" status --porcelain 2>/dev/null | grep -c .) $(git -C "$dir" log --oneline --branches --not --remotes 2>/dev/null | grep -c .) $(git -C "$dir" stash list 2>/dev/null | grep -c .)"
+}
+
+# delete_clone <name> <force 0|1> — removes repos/<name>; refuses when it holds unsaved work.
+delete_clone() {
+  local name="$1" force="$2" dir="$REPOS_DIR/$1" d=0 u=0 s=0
+  valid_name "$name" || return 1
+  [ -e "$dir" ] || return 0
+  if [ "$force" -ne 1 ]; then
+    if [ ! -d "$dir/.git" ]; then
+      row "$(t 'оставлен' 'kept')" "$name: $(t 'каталог не является клоном git' 'the directory is not a git clone')"
+      return 1
+    fi
+    read -r d u s <<< "$(clone_work "$dir")"
+    if [ $((d + u + s)) -gt 0 ]; then
+      row "$(t 'оставлен' 'kept')" "$name: $(t "изменённых файлов $d, неотправленных коммитов $u, stash $s" "modified files $d, unpushed commits $u, stashes $s")"
+      return 1
+    fi
+  fi
+  rm -rf "$dir" && row "$(t 'клон удалён' 'clone gone')" "$name"
+}
+
+cmd_repo_remove() {
+  need_registry; need_services
+  local name="" unlink=0 delclone=0 force=0 arg links backup
+  for arg in "$@"; do
+    case "$arg" in
+      --unlink) unlink=1 ;;
+      --delete-clone) delclone=1 ;;
+      --force) force=1 ;;
+      -*) err "неизвестный параметр: $arg" "unknown option: $arg"; return 1 ;;
+      *) name="$arg" ;;
+    esac
+  done
+  valid_name "$name" || { err "укажи имя репозитория: bin/harness repo-remove <имя>" "give a repository name: bin/harness repo-remove <name>"; return 1; }
+  jq -e --arg n "$name" '.repos | any(.name == $n)' "$REGISTRY" >/dev/null || { err "в реестре нет репозитория «${name}»" "there is no repository \"$name\" in the registry"; return 1; }
+  links="$(jq -r --arg n "$name" '[.services[] | select(.repo == $n) | .name] | join(", ")' "$SERVICES")"
+  if [ -n "$links" ] && [ "$unlink" -ne 1 ]; then
+    err "на репозиторий «${name}» ссылаются связи: $links. Удали их (service-remove) или повтори с --unlink." \
+        "repository \"$name\" is referenced by links: $links. Remove them (service-remove) or repeat with --unlink."
+    return 1
+  fi
+  backup="$(backup_registry)"
+  if [ -n "$links" ]; then
+    json_edit "$SERVICES" --arg n "$name" '.services |= map(select(.repo != $n))' || return 1
+    row "$(t 'связи' 'links')" "$(t "удалены: $links" "removed: $links")"
+  fi
+  json_edit "$REGISTRY" --arg n "$name" '.repos |= map(select(.name != $n))' || return 1
+  row "$(t 'реестр' 'registry')" "$(t "репозиторий «${name}» удалён" "repository \"$name\" removed")"
+  if [ "$delclone" -eq 1 ]; then
+    delete_clone "$name" "$force"
+  elif [ -e "$REPOS_DIR/$name" ]; then
+    row "$(t 'клон' 'clone')" "$(t "оставлен в repos/$name" "kept in repos/$name")"
+  fi
+  row "$(t 'копия' 'backup')" "$backup"
+}
+
+# --- servers ------------------------------------------------------------------
+
+# Key-based login and a known host only: the probe asks nothing and accepts nothing by itself.
+ssh_probe() {
+  ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -p "$3" "$2@$1" true </dev/null >/dev/null 2>&1
+}
+
+check_servers() {
+  local only="$1" name host port user
+  jq -e '.servers | type == "array"' "$SERVERS" >/dev/null 2>&1 || return 0
+  while IFS=$'\t' read -r name host port user; do
+    [ -n "$name" ] || continue
+    [ -z "$only" ] || [ "$only" = "$name" ] || continue
+    if ssh_probe "$host" "$user" "$port"; then
+      ok "$name: SSH $user@$host:$port"
+    else
+      fail "$name: $(t "нет входа по SSH на $user@$host:$port (ключ, known_hosts или сеть)" "no SSH login to $user@$host:$port (key, known_hosts or network)")"
+    fi
+  done < <(jq -r '.servers[] | [.name, .host, (.port // 22 | tostring), .user] | @tsv' "$SERVERS")
+}
+
+cmd_servers() {
+  need_servers
+  [ "$(jq '.servers | length' "$SERVERS")" -gt 0 ] || { say "  реестр серверов пуст" "  the server registry is empty"; return 0; }
+  {
+    t "ИМЯ${US}ХОСТ${US}ПОРТ${US}ПОЛЬЗОВАТЕЛЬ${US}ОКРУЖЕНИЕ${US}ЛОКАЦИЯ${US}НАЗНАЧЕНИЕ" "NAME${US}HOST${US}PORT${US}USER${US}ENV${US}LOCATION${US}PURPOSE"; echo
+    jq -r '.servers[] | [.name, .host, (.port // 22 | tostring), .user, (.env // "?"), (.location // "-"), (.description // "-")] | map(if . == "" then "-" else . end) | join("\u001f")' "$SERVERS"
+  } | print_table
+}
+
+cmd_server_check() {
+  need_servers
+  check_servers "${1:-}"
+  [ "$ERRORS" -eq 0 ]
+}
+
+cmd_server_remove() {
+  need_servers; need_services
+  local name="" unlink=0 arg links dropped backup
+  for arg in "$@"; do
+    case "$arg" in
+      --unlink) unlink=1 ;;
+      -*) err "неизвестный параметр: $arg" "unknown option: $arg"; return 1 ;;
+      *) name="$arg" ;;
+    esac
+  done
+  valid_name "$name" || { err "укажи имя сервера: bin/harness server-remove <имя>" "give a server name: bin/harness server-remove <name>"; return 1; }
+  jq -e --arg n "$name" '.servers | any(.name == $n)' "$SERVERS" >/dev/null || { err "в реестре нет сервера «${name}»" "there is no server \"$name\" in the registry"; return 1; }
+  links="$(jq -r --arg n "$name" '[.services[] | select(.servers | index($n)) | .name] | join(", ")' "$SERVICES")"
+  if [ -n "$links" ] && [ "$unlink" -ne 1 ]; then
+    err "на сервер «${name}» ссылаются связи: $links. Повтори с --unlink: сервер будет убран из них, а связь без серверов удалена." \
+        "server \"$name\" is referenced by links: $links. Repeat with --unlink: the server is taken out of them, and a link left without servers is removed."
+    return 1
+  fi
+  backup="$(backup_registry)"
+  if [ -n "$links" ]; then
+    dropped="$(jq -r --arg n "$name" '[.services[] | select(.servers == [$n]) | .name] | join(", ")' "$SERVICES")"
+    json_edit "$SERVICES" --arg n "$name" '.services |= (map(.servers -= [$n]) | map(select(.servers | length > 0)))' || return 1
+    row "$(t 'связи' 'links')" "$(t "сервер убран из: $links" "server taken out of: $links")"
+    [ -z "$dropped" ] || row "$(t 'связи' 'links')" "$(t "удалены целиком (серверов не осталось): $dropped" "removed entirely (no servers left): $dropped")"
+  fi
+  json_edit "$SERVERS" --arg n "$name" '.servers |= map(select(.name != $n))' || return 1
+  row "$(t 'реестр' 'registry')" "$(t "сервер «${name}» удалён" "server \"$name\" removed")"
+  row "$(t 'копия' 'backup')" "$backup"
+}
+
+# --- links --------------------------------------------------------------------
+
+# Links that point to a repository or a server missing from the registries.
+broken_links() {
+  jq -rn --slurpfile r "$REGISTRY" --slurpfile s "$SERVERS" --slurpfile v "$SERVICES" \
+    --arg norepo "$(t 'в реестре нет репозитория' 'no such repository in the registry:')" \
+    --arg nosrv "$(t 'в реестре нет сервера' 'no such server in the registry:')" '
+    ($r[0].repos | map(.name)) as $repos
+    | ($s[0].servers | map(.name)) as $servers
+    | $v[0].services[]
+    | . as $svc
+    | (select(.repo as $x | $repos | index($x) | not) | "\(.name): \($norepo) \(.repo)"),
+      (.servers[] | select(. as $x | $servers | index($x) | not) | "\($svc.name): \($nosrv) \(.)")
+  ' 2>/dev/null
+}
+
+# No argument — all links; with an argument — by the name of a repository, a server or a service.
+cmd_map() {
+  need_services
+  local out
+  out="$(jq -r --arg q "${1:-}" '
+    .services[]
+    | select($q == "" or .repo == $q or .name == $q or (.servers | index($q)))
+    | [.name, .scope, .repo, (.servers | join(", ")), .path, .deploy]
+    | map(if . == null or . == "" then "-" else . end) | join("\u001f")
+  ' "$SERVICES")"
+  if [ -n "$out" ]; then
+    printf '%s\n' "$(t "СЕРВИС${US}ТИП${US}РЕПОЗИТОРИЙ${US}СЕРВЕРЫ${US}ПУТЬ${US}ДОСТАВКА" "SERVICE${US}SCOPE${US}REPOSITORY${US}SERVERS${US}PATH${US}DEPLOY")" "$out" | print_table
+  elif [ -n "${1:-}" ]; then
+    say "  связей не найдено для «$1»" "  no links found for \"$1\""
+  else
+    say "  связей не найдено" "  no links found"
+  fi
+}
+
+cmd_service_remove() {
+  need_services
+  local name="${1:-}" backup
+  valid_name "$name" || { err "укажи имя связи: bin/harness service-remove <имя>" "give a link name: bin/harness service-remove <name>"; return 1; }
+  jq -e --arg n "$name" '.services | any(.name == $n)' "$SERVICES" >/dev/null || { err "в реестре нет связи «${name}»" "there is no link \"$name\" in the registry"; return 1; }
+  backup="$(backup_registry)"
+  json_edit "$SERVICES" --arg n "$name" '.services |= map(select(.name != $n))' || return 1
+  row "$(t 'реестр' 'registry')" "$(t "связь «${name}» удалена" "link \"$name\" removed")"
+  row "$(t 'копия' 'backup')" "$backup"
+}
+
+# --- reset --------------------------------------------------------------------
+
+cmd_reset() {
+  need_registry; need_servers; need_services
+  local yes=0 delclones=0 force=0 arg name dir d u s nrepos nservers nlinks backup kept=0
+  for arg in "$@"; do
+    case "$arg" in
+      --yes|-y) yes=1 ;;
+      --delete-clones) delclones=1 ;;
+      --force) force=1 ;;
+      *) err "неизвестный параметр: $arg" "unknown option: $arg"; return 1 ;;
+    esac
+  done
+  nrepos="$(jq '.repos | length' "$REGISTRY")"
+  nservers="$(jq '.servers | length' "$SERVERS")"
+  nlinks="$(jq '.services | length' "$SERVICES")"
+
+  say "Сброс реестра harness. Будет удалено:" "Resetting the harness registry. To be removed:"
+  row "$(t 'репозитории' 'repositories')" "$nrepos"
+  row "$(t 'серверы' 'servers')" "$nservers"
+  row "$(t 'связи' 'links')" "$nlinks"
+  if [ "$nrepos" -gt 0 ]; then
+    echo
+    say "Клоны в repos/:" "Clones in repos/:"
+    {
+      t "РЕПОЗИТОРИЙ${US}КЛОН${US}ИЗМЕНЕНО${US}НЕОТПРАВЛЕНО${US}STASH" "REPOSITORY${US}CLONE${US}MODIFIED${US}UNPUSHED${US}STASH"; echo
+      while IFS= read -r name; do
+        dir="$REPOS_DIR/$name"
+        if [ -d "$dir/.git" ]; then
+          read -r d u s <<< "$(clone_work "$dir")"
+          echo "$name${US}$(t 'есть' 'yes')${US}$d${US}$u${US}$s"
+        else
+          echo "$name${US}$(t 'нет' 'no')${US}-${US}-${US}-"
+        fi
+      done < <(jq -r '.repos[].name' "$REGISTRY")
+    } | print_table
+    echo
+    if [ "$delclones" -eq 1 ] && [ "$force" -eq 1 ]; then
+      say "Клоны будут удалены ВСЕ, включая те, где есть несохранённая работа (--force)." "ALL clones will be deleted, including those with unsaved work (--force)."
+    elif [ "$delclones" -eq 1 ]; then
+      say "Клоны без несохранённой работы будут удалены; остальные останутся на диске." "Clones without unsaved work will be deleted; the rest stay on disk."
+    else
+      say "Клоны останутся на диске (чтобы удалить и их — --delete-clones)." "Clones stay on disk (add --delete-clones to delete them too)."
+    fi
+  fi
+  say "Останутся: harness.json (владелец, язык, интеграции), правила и skills. Серверы и удалённые репозитории не затрагиваются." \
+      "Kept: harness.json (owner, language, integrations), rules and skills. Servers and remote repositories are not touched."
+
+  if [ "$yes" -ne 1 ]; then
+    echo
+    say "Ничего не изменено. Чтобы выполнить сброс, повтори команду с --yes." "Nothing was changed. To perform the reset, repeat the command with --yes."
+    return 0
+  fi
+
+  echo
+  backup="$(backup_registry)"
+  if [ "$delclones" -eq 1 ]; then
+    while IFS= read -r name; do
+      [ -n "$name" ] || continue
+      delete_clone "$name" "$force" || kept=$((kept + 1))
+    done < <(jq -r '.repos[].name' "$REGISTRY")
+  fi
+  echo '{"repos": []}' > "$REGISTRY"
+  echo '{"servers": []}' > "$SERVERS"
+  echo '{"services": []}' > "$SERVICES"
+  row "$(t 'реестр' 'registry')" "$(t "очищен: репозиториев $nrepos → 0, серверов $nservers → 0, связей $nlinks → 0" "emptied: repositories $nrepos → 0, servers $nservers → 0, links $nlinks → 0")"
+  [ "$kept" -eq 0 ] || row "$(t 'клоны' 'clones')" "$(t "оставлено на диске: $kept" "kept on disk: $kept")"
+  row "$(t 'копия' 'backup')" "$backup"
+}
+
+# --- commits ------------------------------------------------------------------
+
+# Checks the commits that are not in upstream yet: author, committer, AI attribution.
+cmd_check_commits() {
+  need_jq
+  local dir="${1:-.}" name email range bad=0 sha an ae cn ce
+  name="$(conf '.owner.name')"; email="$(conf '.owner.email')"
+  if [ -z "$name" ] || [ -z "$email" ]; then
+    err "владелец не задан: bin/harness init" "the owner is not configured: bin/harness init"; return 1
+  fi
+  git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || { err "$dir — не git-репозиторий" "$dir is not a git repository"; return 1; }
+  if git -C "$dir" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
+    range='@{u}..HEAD'
+  elif git -C "$dir" rev-parse --verify --quiet refs/remotes/origin/HEAD >/dev/null; then
+    range='refs/remotes/origin/HEAD..HEAD'
+  else
+    range='HEAD'
+  fi
+  while IFS=$'\t' read -r sha an ae cn ce; do
+    [ -n "$sha" ] || continue
+    if [ "$an" != "$name" ] || [ "$ae" != "$email" ] || [ "$cn" != "$name" ] || [ "$ce" != "$email" ]; then
+      echo "  FAIL  $sha: $(t "автор/коммиттер $an <$ae> / $cn <$ce>, ожидался $name <$email>" "author/committer $an <$ae> / $cn <$ce>, expected $name <$email>")"; bad=1
+    fi
+    if git -C "$dir" log -1 --format=%B "$sha" | grep -Eiq "$AI_MARKERS"; then
+      echo "  FAIL  $sha: $(t 'в сообщении есть AI-атрибуция' 'the message contains AI attribution')"; bad=1
+    fi
+  done < <(git -C "$dir" log --format='%h%x09%an%x09%ae%x09%cn%x09%ce' "$range")
+  [ "$bad" -eq 0 ] && echo "  ok    $(t "коммиты в порядке ($(git -C "$dir" rev-list --count "$range") шт.)" "commits are fine ($(git -C "$dir" rev-list --count "$range"))")"
+  return "$bad"
+}
+
+# --- docker -------------------------------------------------------------------
+
+cmd_docker_up() {
+  docker info >/dev/null 2>&1 && { say "демон Docker уже запущен" "the Docker daemon is already running"; return 0; }
+  case "$(uname -s)" in
+    Darwin) open -ga Docker ;;
+    Linux)  systemctl --user start docker-desktop 2>/dev/null || sudo -n systemctl start docker ;;
+    *)      err "не знаю, как запустить Docker на этой ОС" "do not know how to start Docker on this OS"; return 1 ;;
+  esac
+  local i=0
+  while [ "$i" -lt 60 ]; do
+    docker info >/dev/null 2>&1 && { say "демон Docker запущен" "the Docker daemon is running"; return 0; }
+    sleep 2; i=$((i + 1))
+  done
+  err "демон Docker не поднялся за 120 секунд" "the Docker daemon did not start within 120 seconds"
+  return 1
+}
+
+cmd_docker_check() {
+  docker info >/dev/null 2>&1 || { say "демон Docker остановлен — ресурсов нет" "the Docker daemon is stopped — no resources"; return 0; }
+  local c n v i
+  c="$(harness_containers | sort -u | grep -c .)"
+  n="$(harness_networks | sort -u | grep -c .)"
+  v="$(harness_volumes | sort -u | grep -c .)"
+  i="$(harness_images | sort -u | grep -c .)"
+  say "ресурсы harness: контейнеров $c, сетей $n, томов $v, образов $i" "harness resources: containers $c, networks $n, volumes $v, images $i"
+  [ $((c + n + v + i)) -eq 0 ]
+}
+
+cmd_docker_clean() {
+  docker info >/dev/null 2>&1 || { say "демон Docker остановлен — убирать нечего" "the Docker daemon is stopped — nothing to clean"; return 0; }
+  local ids
+  # shellcheck disable=SC2086  # ids are separate words on purpose
+  {
+    ids="$(harness_containers | sort -u)"; [ -z "$ids" ] || docker rm -f -v $ids >/dev/null
+    ids="$(harness_networks | sort -u)";   [ -z "$ids" ] || docker network rm $ids >/dev/null
+    ids="$(harness_volumes | sort -u)";    [ -z "$ids" ] || docker volume rm -f $ids >/dev/null
+    ids="$(harness_images | sort -u)";     [ -z "$ids" ] || docker rmi -f $ids >/dev/null
+  }
+  cmd_docker_check
+}
+
+# --- selfcheck ----------------------------------------------------------------
+
+# Integrity of harness itself: what CI and the release build rely on.
+cmd_selfcheck() {
+  need_jq
+  local v f name cyr
+  v="$(local_version)"
+  section "$(t 'Версия' 'Version')"
+  if printf '%s' "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then ok "VERSION $v"; else fail "$(t "VERSION должен быть вида X.Y.Z, сейчас «${v}»" "VERSION must look like X.Y.Z, now \"$v\"")"; fi
+  for f in CHANGELOG.md CHANGELOG.en.md; do
+    if grep -Fq "## [$v]" "$ROOT/$f" 2>/dev/null; then ok "$f: [$v]"; else fail "$(t "в $f нет записи «## [$v]»" "$f has no \"## [$v]\" entry")"; fi
+  done
+
+  section "$(t 'Языковые комплекты' 'Language sets')"
+  local mism
+  mism="$(i18n_mismatch)"
+  if [ -n "$mism" ]; then
+    while IFS= read -r f; do fail "$(t "$f — нет пары на втором языке" "$f — has no counterpart in the other language")"; done <<< "$mism"
+  else
+    ok "$(t "ru и en совпадают по составу: $(lang_files ru | grep -c .) файлов" "ru and en hold the same files: $(lang_files ru | grep -c .)")"
+  fi
+  for f in "$I18N"/*/skills/*/SKILL.md; do
+    [ -f "$f" ] || continue
+    name="$(sed -n 's/^name: *//p' "$f" | head -1)"
+    [ "$name" = "$(basename "$(dirname "$f")")" ] || fail "$(t "${f#"$ROOT"/}: name «${name}» не совпадает с именем каталога" "${f#"$ROOT"/}: name \"$name\" differs from the directory name")"
+    grep -q '^description: .' "$f" || fail "$(t "${f#"$ROOT"/}: нет description" "${f#"$ROOT"/}: description is missing")"
+  done
+  # Cyrillic is matched by its UTF-8 lead bytes: a character range depends on the locale.
+  cyr="$(printf '[\320\321][\200-\277]')"
+  if LC_ALL=C grep -rlq "$cyr" "$I18N/en" 2>/dev/null; then
+    fail "$(t 'в i18n/en есть кириллица' 'i18n/en contains Cyrillic'): $(LC_ALL=C grep -rl "$cyr" "$I18N/en" | sed "s|^$ROOT/||" | tr '\n' ' ')"
+  fi
+
+  section "$(t 'Ядро без данных владельца' 'Core without owner data')"
+  if jq -e . "$SETTINGS" >/dev/null 2>&1; then
+    if jq -e '(.env // {}) | keys | map(select(test("^GIT_(AUTHOR|COMMITTER)_"))) | length == 0' "$SETTINGS" >/dev/null; then
+      ok "$(t '.claude/settings.json не содержит автора коммитов' '.claude/settings.json holds no commit author')"
+    else
+      fail "$(t 'в .claude/settings.json записан автор коммитов — его место в harness.json' '.claude/settings.json holds a commit author — it belongs in harness.json')"
+    fi
+  else
+    fail "$(t '.claude/settings.json отсутствует или повреждён' '.claude/settings.json is missing or corrupted')"
+  fi
+  for f in bin/harness install.sh; do
+    if bash -n "$ROOT/$f" 2>/dev/null; then ok "bash -n $f"; else fail "bash -n $f"; fi
+  done
+
+  say "Итог: ошибок $ERRORS" "Result: errors $ERRORS"
+  [ "$ERRORS" -eq 0 ]
+}
+
+# --- public release -----------------------------------------------------------
+
+# Drops the <!-- private --> … <!-- /private --> blocks and the version sections left empty after that.
+strip_private() {
+  local file="$1" tmp
+  [ -f "$file" ] || return 0
+  tmp="$(mktemp "${TMPDIR:-/tmp}/harness.XXXXXX")" || return 1
+  awk '
+    function flush() { if (head != "") { if (keep) printf "%s%s", head, body; head = ""; body = ""; keep = 0 } }
+    /<!-- private -->/  { skip = 1; next }
+    /<!-- \/private -->/ { skip = 0; next }
+    skip { next }
+    /^## \[/ { flush(); head = $0 "\n"; next }
+    head != "" { body = body $0 "\n"; if ($0 !~ /^[[:space:]]*$/) keep = 1; next }
+    { print }
+    END { flush() }
+  ' "$file" | cat -s > "$tmp" && cat "$tmp" > "$file"
+  rm -f "$tmp"
+}
+
+# leak_grep <dir> <label> <regex> <allowed regex> [grep flags] — every match outside the allowed ones is a failure.
+leak_grep() {
+  local dir="$1" label="$2" re="$3" allow="$4" flags="${5:-}" hits
+  hits="$(cd "$dir" && grep -rnIE ${flags:+"$flags"} -e "$re" . --exclude-dir=.git 2>/dev/null | grep -vE "$allow" | head -20)"
+  if [ -n "$hits" ]; then
+    fail "$label:"
+    while IFS= read -r re; do echo "          ${re:0:170}"; done <<< "$hits"
+  else
+    ok "$label"
+  fi
+}
+
+# Terms that identify the owner: taken from harness.json and the registries of this install.
+owner_terms() {
+  [ -f "$CONF" ] || [ -d "$ROOT/registry" ] || return 0
+  ensure_data
+  {
+    conf '.owner.email'
+    conf '.owner.email' | sed 's/.*@//'
+    conf '.owner.name' | tr ' ' '\n' | awk 'length($0) >= 3'
+    conf '.integrations | .. | strings' | sed -E 's#^https?://##; s#/.*$##' | awk 'length($0) >= 5'
+    conf '.release.deny[]?'
+    jq -r '.repos[] | .url, .plane_project, .plane_project_id, (.name | select(length >= 5)) | select(. != null)' "$REGISTRY" 2>/dev/null
+    jq -r '.repos[].url' "$REGISTRY" 2>/dev/null | sed -nE 's#^(git@|https://)[^:/]+[:/]([^/]+)/.*#\2#p'
+    jq -r '.servers[] | .host, .provider, (.name | select(length >= 5)) | select(. != null)' "$SERVERS" 2>/dev/null
+    jq -r '.services[] | (.name | select(length >= 5)), (.url // empty | sub("^https?://"; "") | sub("/.*$"; ""))' "$SERVICES" 2>/dev/null
+  } | awk 'NF' | LC_ALL=C sort -u | grep -vxF -f <(conf '.release.allow_terms[]?'; echo "$US")
+}
+
+# Phrases in which the owner's name is legitimate: authorship and the public repository address.
+owner_allowed() {
+  conf '.owner.name'
+  conf '.release.author_aliases[]?'
+  conf '.release.public_repo' | sed -E 's#^(git@|https://)[^:/]+[:/]##; s#\.git$##'
+}
+
+# Scans a tree that is about to become public. Fails on anything that looks like owner data or a secret.
+leak_check() {
+  local dir="$1" p terms allowed line stripped phrase term found n=0
+  section "$(t 'Проверка на утечки' 'Leak check'): ${dir#"$ROOT"/}"
+
+  for p in harness.json registry repos dist .harness-backup .claude/settings.local.json .claude/CLAUDE.md .claude/rules .claude/skills; do
+    [ ! -e "$dir/$p" ] || fail "$(t "в сборке есть $p — это данные установки, не ядро" "the build contains $p — install data, not the core")"
+  done
+  p="$(cd "$dir" && find . \( -name .DS_Store -o -name '.env' -o -name '.env.*' -o -name '*.pem' -o -name '*.key' -o -name 'id_rsa*' -o -name 'id_ed25519*' \) -not -path './.git/*' | head -5)"
+  if [ -n "$p" ]; then fail "$(t 'лишние файлы' 'stray files'): $(echo "$p" | tr '\n' ' ')"; else ok "$(t 'нет файлов с данными установки и ключами' 'no install data or key files')"; fi
+
+  leak_grep "$dir" "$(t 'адреса почты' 'email addresses')" \
+    '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}' \
+    'git@github\.com|@([A-Za-z0-9-]+\.)*example\.(com|org|net)|@users\.noreply\.github\.com|noreply@anthropic'
+  leak_grep "$dir" "$(t 'IP-адреса' 'IP addresses')" \
+    '(^|[^0-9.])((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])([^0-9.]|$)' \
+    '127\.0\.0\.1|0\.0\.0\.0|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.'
+  leak_grep "$dir" "$(t 'идентификаторы UUID' 'UUID identifiers')" \
+    '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' '^$' -i
+  leak_grep "$dir" "$(t 'домашние каталоги' 'home directories')" \
+    '/(Users|home)/[A-Za-z0-9._-]+' '/home/(user|runner)|/Users/(you|user)'
+  leak_grep "$dir" "$(t 'ключи и токены' 'keys and tokens')" \
+    'BEGIN [A-Z ]*PRIVATE KEY|(ghp|gho|ghs|ghu)_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|glpat-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|y[0-3]_[A-Za-z0-9_-]{30,}' '^$'
+
+  terms="$(owner_terms)"
+  if [ -n "$terms" ]; then
+    allowed="$(owner_allowed)"
+    found=""
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      stripped="$line"
+      while IFS= read -r phrase; do
+        [ -z "$phrase" ] || stripped="${stripped//"$phrase"/}"
+      done <<< "$allowed"
+      while IFS= read -r term; do
+        if printf '%s' "${stripped#*:*:}" | grep -qiF -e "$term"; then
+          found="$found${line%%:*}:$(printf '%s' "$line" | cut -d: -f2): «${term}»"$'\n'; n=$((n + 1))
+          break
+        fi
+      done <<< "$terms"
+      [ "$n" -lt 30 ] || break
+    done < <(cd "$dir" && grep -rnIiF -f <(echo "$terms") . --exclude-dir=.git 2>/dev/null)
+    if [ -n "$found" ]; then
+      fail "$(t "данные владельца (слов в списке: $(echo "$terms" | grep -c .))" "owner data (terms in the list: $(echo "$terms" | grep -c .))"):"
+      printf '%s' "$found" | sed 's/^/          /'
+    else
+      ok "$(t "данные владельца не найдены (слов в списке: $(echo "$terms" | grep -c .))" "no owner data found (terms in the list: $(echo "$terms" | grep -c .))")"
+    fi
+  else
+    ok "$(t 'данных владельца в этой установке нет — проверены только общие признаки' 'this install holds no owner data — only the generic patterns were checked')"
+  fi
+
+  if integration_on gitguardian && command -v ggshield >/dev/null 2>&1 && [ -n "${GITGUARDIAN_TOKEN:-}" ]; then
+    if GITGUARDIAN_API_KEY="$GITGUARDIAN_TOKEN" ggshield secret scan path -r -y "$dir" >/dev/null 2>&1; then
+      ok "ggshield: $(t 'секретов нет' 'no secrets')"
+    else
+      fail "ggshield: $(t "найдены секреты или проверка не прошла — ggshield secret scan path -r ${dir#"$ROOT"/}" "secrets found or the scan failed — ggshield secret scan path -r ${dir#"$ROOT"/}")"
+    fi
+  fi
+  [ "$ERRORS" -eq 0 ]
+}
+
+# Requirements for a real (non-preview) release: clean tree, version ≥ 1.0.0, tag v<version> on HEAD.
+release_ready() {
+  local v="$1"
+  if [ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]; then
+    err "рабочее дерево не чистое: сначала закоммить изменения (или собери пробную версию: --preview)" \
+        "the working tree is not clean: commit first (or build a trial version: --preview)"; return 1
+  fi
+  if ver_gt "1.0.0" "$v"; then
+    err "публичные релизы начинаются с 1.0.0, сейчас $v" "public releases start at 1.0.0, now $v"; return 1
+  fi
+  if [ "$(git -C "$ROOT" rev-parse -q --verify "refs/tags/v$v^{commit}" 2>/dev/null)" != "$(git -C "$ROOT" rev-parse HEAD)" ]; then
+    err "на текущем коммите нет тега v$v" "the current commit is not tagged v$v"; return 1
+  fi
+}
+
+cmd_release_build() {
+  need_jq
+  local preview=0 v out f n
+  [ "${1:-}" = "--preview" ] && preview=1
+  v="$(local_version)"
+  [ "$preview" -eq 1 ] || release_ready "$v" || return 1
+  out="$DIST/harness-v$v"
+  rm -rf "$out" "$DIST/harness-v$v.tar.gz" "$DIST/harness-v$v.tar.gz.sha256" "$DIST/harness-v$v.preview"
+  mkdir -p "$out"
+
+  if [ "$preview" -eq 1 ]; then
+    # Trial build from the working tree: tracked files plus new ones that are not ignored.
+    while IFS= read -r f; do
+      [ -f "$ROOT/$f" ] || continue
+      mkdir -p "$out/$(dirname "$f")" && cp -p "$ROOT/$f" "$out/$f"
+    done < <(git -C "$ROOT" ls-files -co --exclude-standard)
+    : > "$DIST/harness-v$v.preview"
+  else
+    git -C "$ROOT" archive HEAD | tar -x -C "$out" || return 1
+  fi
+
+  # The owner's data never leaves the private repository.
+  rm -rf "$out/harness.json" "$out/registry" "$out/repos" "$out/dist" "$out/.harness-backup"
+  strip_private "$out/CHANGELOG.md"
+  strip_private "$out/CHANGELOG.en.md"
+  if ! grep -qF "$IGNORE_MARK" "$out/.gitignore" 2>/dev/null; then
+    printf '\n%s\n%s\n%s\n' "$IGNORE_MARK (created by bin/harness init, never committed here)" "/harness.json" "/registry/" >> "$out/.gitignore"
+  fi
+
+  n="$(find "$out" -type f | grep -c .)"
+  section "$(t "Сборка harness v$v: файлов $n" "Build of harness v$v: $n files")$([ "$preview" -eq 0 ] || t ' (пробная, из рабочего дерева)' ' (trial, from the working tree)')"
+  for f in LICENSE README.md README.en.md install.sh bin/harness VERSION CHANGELOG.md CHANGELOG.en.md .claude/settings.json; do
+    [ -f "$out/$f" ] || fail "$(t "в сборке нет $f" "the build lacks $f")"
+  done
+  grep -Fq "## [$v]" "$out/CHANGELOG.md" || fail "$(t "в публичном CHANGELOG.md нет записи [$v] — она целиком закрытая?" "the public CHANGELOG.md has no [$v] entry — is it entirely private?")"
+  leak_check "$out"
+
+  if [ "$ERRORS" -gt 0 ]; then
+    echo
+    err "Сборка НЕ готова к публикации: ошибок $ERRORS. Исправь источник в ядре и собери заново." \
+        "The build is NOT fit for publishing: errors $ERRORS. Fix the source in the core and build again."
+    return 1
+  fi
+  tar -czf "$DIST/harness-v$v.tar.gz" -C "$DIST" "harness-v$v"
+  (cd "$DIST" && shasum -a 256 "harness-v$v.tar.gz" > "harness-v$v.tar.gz.sha256")
+  echo
+  say "Готово: dist/harness-v$v/ и dist/harness-v$v.tar.gz" "Done: dist/harness-v$v/ and dist/harness-v$v.tar.gz"
+  [ "$preview" -eq 0 ] || say "Это пробная сборка: опубликовать её нельзя. Для релиза — коммит, тег v$v и bin/harness release-build." \
+                              "This is a trial build and cannot be published. For a release: commit, tag v$v, then bin/harness release-build."
+}
+
+# Section of a changelog for one version, without the heading.
+changelog_section() {
+  awk -v v="## [$2]" 'index($0, v) == 1 { on = 1; next } /^## \[/ { on = 0 } on' "$1" 2>/dev/null
+}
+
+cmd_release_publish() {
+  need_jq
+  local push=0 v out repo slug work notes
+  [ "${1:-}" = "--push" ] && push=1
+  v="$(local_version)"
+  out="$DIST/harness-v$v"
+  repo="$(conf '.release.public_repo')"
+  [ -n "$repo" ] || { err "в harness.json не задан release.public_repo" "harness.json has no release.public_repo"; return 1; }
+  release_ready "$v" || return 1
+  if [ ! -d "$out" ] || [ -e "$DIST/harness-v$v.preview" ] || [ ! -f "$DIST/harness-v$v.tar.gz" ]; then
+    err "нет готовой сборки v$v: сначала bin/harness release-build" "there is no finished build of v$v: run bin/harness release-build first"; return 1
+  fi
+  leak_check "$out" || { err "публикация остановлена: проверка на утечки не прошла" "publishing stopped: the leak check failed"; return 1; }
+
+  slug="$(printf '%s' "$repo" | sed -E 's#^(git@|https://)[^:/]+[:/]##; s#\.git$##')"
+  work="$DIST/public-repo"
+  rm -rf "$work"
+  git clone --quiet "$repo" "$work" 2>/dev/null || { err "не удалось клонировать $repo" "could not clone $repo"; return 1; }
+  if git -C "$work" rev-parse -q --verify "refs/tags/v$v" >/dev/null; then
+    err "тег v$v уже есть в публичном репозитории" "tag v$v already exists in the public repository"; return 1
+  fi
+  git -C "$work" symbolic-ref HEAD refs/heads/main
+  find "$work" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+  cp -R "$out"/. "$work"/
+  git -C "$work" add -A
+  if git -C "$work" diff --cached --quiet; then
+    say "публичный репозиторий уже совпадает со сборкой v$v — отправлять нечего" "the public repository already matches build v$v — nothing to push"; return 0
+  fi
+  echo
+  say "Изменения в $slug:" "Changes in $slug:"
+  git -C "$work" diff --cached --stat | tail -n 25
+  if [ "$push" -ne 1 ]; then
+    echo
+    say "Ничего не отправлено. Чтобы опубликовать v$v, повтори с --push." "Nothing was pushed. To publish v$v, repeat with --push."
+    return 0
+  fi
+
+  git -C "$work" commit --quiet -m "Release v$v" || return 1
+  git -C "$work" tag -a "v$v" -m "harness v$v" || return 1
+  git -C "$work" push --quiet origin HEAD:refs/heads/main "v$v" || { err "push в $slug не прошёл" "push to $slug failed"; return 1; }
+  notes="$(mktemp "${TMPDIR:-/tmp}/harness.XXXXXX")"
+  { changelog_section "$out/CHANGELOG.en.md" "$v"; printf '\n---\n\n'; changelog_section "$out/CHANGELOG.md" "$v"; } > "$notes"
+  if command -v gh >/dev/null 2>&1; then
+    gh release create "v$v" --repo "$slug" --verify-tag --title "v$v" --notes-file "$notes" \
+      "$DIST/harness-v$v.tar.gz" "$DIST/harness-v$v.tar.gz.sha256" || err "тег отправлен, но релиз в GitHub создать не удалось" "the tag is pushed, but the GitHub release could not be created"
+  fi
+  rm -f "$notes"
+  say "Опубликовано: $slug v$v" "Published: $slug v$v"
+}
+
+# --- Claude Code hooks --------------------------------------------------------
+
+hook_session_start() {
+  local version update problems context message sid="default" owner fetched=1 rc
+  [ -t 0 ] || sid="$(jq -r '.session_id // "default"' 2>/dev/null)"
+  # Version control of harness itself: the hooks from .githooks are enabled on every device.
+  git -C "$ROOT" config --local core.hooksPath .githooks 2>/dev/null
+  find "$(dirname "$(state_file x)")" -name 'update-check-*' -mtime +7 -delete 2>/dev/null
+  ensure_data
+  version="$(version_line)"
+  context="$version"
+
+  owner="$(conf '.owner.name')"
+  if [ -n "$owner" ]; then
+    context="$context"$'\n'"$(t "Владелец harness: $owner. Язык общения: русский." "Harness owner: $owner. Conversation language: English.")"
+  else
+    context="$context"$'\n'"$(t 'harness не настроен: владелец не задан. Скажи об этом пользователю и предложи выполнить bin/harness init; до этого не коммить.' 'harness is not set up: no owner is configured. Tell the user and suggest running bin/harness init; do not commit before that.')"
+  fi
+  # Rules and skills in .claude/ are a copy of i18n/<lang>: redeploy when they are missing or outdated.
+  if [ -d "$I18N/$HLANG" ] && lang_stale "$HLANG" && apply_lang "$HLANG"; then
+    context="$context"$'\n'"$(t 'Правила и skills только что развёрнуты из i18n в .claude/ — в начале сессии их в контексте могло не быть. Прочитай сейчас .claude/CLAUDE.md и все файлы .claude/rules/ и следуй им.' 'Rules and skills were just deployed from i18n to .claude/ — they may have been absent from the context at session start. Read .claude/CLAUDE.md and every file in .claude/rules/ now and follow them.')"
+  fi
+  apply_identity; rc=$?
+  if [ "$rc" -eq 2 ]; then
+    if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+      printf 'export GIT_AUTHOR_NAME=%q GIT_COMMITTER_NAME=%q GIT_AUTHOR_EMAIL=%q GIT_COMMITTER_EMAIL=%q\n' \
+        "$owner" "$owner" "$(conf '.owner.email')" "$(conf '.owner.email')" >> "$CLAUDE_ENV_FILE"
+    fi
+    context="$context"$'\n'"$(t 'Автор коммитов только что записан в .claude/settings.local.json. Перед первым коммитом в этой сессии проверь: git var GIT_AUTHOR_IDENT. Если автор не тот — попроси перезапустить сессию.' 'The commit author was just written to .claude/settings.local.json. Before the first commit in this session check: git var GIT_AUTHOR_IDENT. If the author is wrong, ask to restart the session.')"
+  fi
+
+  fetch_origin 15 || fetched=0
+  echo "$(date +%s) $(git -C "$ROOT" rev-parse --quiet --verify "origin/$(default_branch)" 2>/dev/null)" > "$(state_file "$sid")"
+  update="$(update_line)"
+  problems="$(cmd_doctor --quiet 2>&1)"
+  message="$version"
+  [ -z "$update" ] || { message="$message · $update"; context="$context"$'\n'"$update"; }
+  [ "$fetched" -eq 1 ] || context="$context"$'\n'"$(t 'origin недоступен: наличие обновления не проверено.' 'origin is unreachable: the update check was skipped.')"
+  if [ -n "$problems" ]; then
+    message="$message · $(t 'окружение: есть замечания' 'environment: there are remarks')"
+    context="$context"$'\n'"$(t 'Замечания doctor:' 'Doctor remarks:')"$'\n'"$problems"
+  else
+    context="$context"$'\n'"$(t 'Окружение в порядке (быстрая проверка).' 'The environment is fine (quick check).')"
+  fi
+  context="$context"$'\n'"$(t 'В первом ответе сообщи пользователю версию harness, наличие обновления и замечания doctor, если они есть.' 'In your first reply tell the user the harness version, whether an update is available, and the doctor remarks if there are any.')"
+  jq -n --arg m "$message" --arg c "$context" \
+    '{systemMessage: $m, hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}}'
+}
+
+# UserPromptSubmit: at most once per UPDATE_CHECK_INTERVAL looks whether a new version is out.
+# Each new version is announced once, so a declined offer is not repeated.
+hook_update_check() {
+  local sid="default" file now last=0 offered="" remote update
+  [ -t 0 ] || sid="$(jq -r '.session_id // "default"' 2>/dev/null)"
+  file="$(state_file "$sid")"
+  now="$(date +%s)"
+  [ -f "$file" ] && read -r last offered < "$file"
+  [ $((now - ${last:-0})) -ge "$UPDATE_CHECK_INTERVAL" ] || exit 0
+  fetch_origin 12
+  remote="$(git -C "$ROOT" rev-parse --quiet --verify "origin/$(default_branch)" 2>/dev/null)"
+  echo "$now $remote" > "$file"
+  [ -n "$remote" ] && [ "$remote" != "$offered" ] || exit 0
+  update="$(update_line)"
+  [ -n "$update" ] || exit 0
+  jq -n --arg c "$(t "Сейчас работает $(version_line). В origin $update. В этом ответе сообщи об этом владельцу и предложи обновиться в текущей сессии через skill harness-update; без его согласия не обновляй." "Now running $(version_line). In origin: $update. In this reply tell the owner about it and offer to update in the current session through the harness-update skill; do not update without their consent.")" \
+    '{hookSpecificOutput: {hookEventName: "UserPromptSubmit", additionalContext: $c}}'
+}
+
+# git pre-commit in harness itself: every commit bumps VERSION and writes both changelogs.
+hook_git_pre_commit() {
+  local new old f mism
+  new="$(git -C "$ROOT" show :VERSION 2>/dev/null | tr -d '[:space:]')"
+  old="$(git -C "$ROOT" show HEAD:VERSION 2>/dev/null | tr -d '[:space:]')"
+  if ! printf '%s' "$new" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    err "harness: VERSION должен быть вида X.Y.Z, сейчас «${new}»." "harness: VERSION must look like X.Y.Z, now \"$new\"."; exit 1
+  fi
+  if [ -n "$old" ] && ! ver_gt "$new" "$old"; then
+    err "harness: каждый коммит поднимает версию. Сейчас v$old — увеличь VERSION, добавь запись в CHANGELOG.md и CHANGELOG.en.md и включи эти файлы в коммит." \
+        "harness: every commit bumps the version. Now v$old — increase VERSION, add an entry to CHANGELOG.md and CHANGELOG.en.md and include these files in the commit."; exit 1
+  fi
+  for f in CHANGELOG.md CHANGELOG.en.md; do
+    if ! git -C "$ROOT" show ":$f" 2>/dev/null | grep -Fq "## [$new]"; then
+      err "harness: в $f нет записи «## [$new]»." "harness: $f has no \"## [$new]\" entry."; exit 1
+    fi
+  done
+  mism="$(i18n_mismatch)"
+  if [ -n "$mism" ]; then
+    err "harness: языковые комплекты расходятся — нет пары у файлов:" "harness: the language sets differ — these files have no counterpart:"
+    echo "$mism" >&2; exit 1
+  fi
+}
+
+# git pre-push in harness itself: no outgoing commit may skip the version bump.
+hook_git_pre_push() {
+  local lsha rref rsha range sha bad=0
+  while read -r _ lsha rref rsha; do
+    case "$lsha" in *[!0]*) ;; *) continue ;; esac
+    case "$rref" in
+      refs/heads/*) ;;
+      refs/tags/*)
+        if [ "$(git -C "$ROOT" cat-file -t "$lsha" 2>/dev/null)" != "tag" ]; then
+          err "harness: тег ${rref#refs/tags/} без описания. Создай аннотированный: git tag -a <тег> -m \"<описание>\"." \
+              "harness: tag ${rref#refs/tags/} has no description. Create an annotated one: git tag -a <tag> -m \"<description>\"."; bad=1
+        fi
+        continue ;;
+      *) continue ;;
+    esac
+    case "$rsha" in *[!0]*) range="$rsha..$lsha" ;; *) range="$lsha --not --remotes=origin" ;; esac
+    # shellcheck disable=SC2086  # the range is two words when the branch is new
+    for sha in $(git -C "$ROOT" rev-list --no-merges $range); do
+      if [ -z "$(git -C "$ROOT" diff-tree --no-commit-id --name-only -r --root "$sha" -- VERSION)" ]; then
+        err "harness: коммит $(git -C "$ROOT" log -1 --format='%h %s' "$sha") не поднимает VERSION." \
+            "harness: commit $(git -C "$ROOT" log -1 --format='%h %s' "$sha") does not bump VERSION."; bad=1
+      fi
+    done
+  done
+  exit "$bad"
+}
+
+hook_subagent_start() {
+  jq -n --arg c "$(t "Ты работаешь под управлением $(version_line). Правила harness обязательны и для тебя." "You are running under $(version_line). The harness rules are binding for you too.")" \
+    '{hookSpecificOutput: {hookEventName: "SubagentStart", additionalContext: $c}}'
+}
+
+# PreToolUse for Bash: does not let anyone swap the author or add AI attribution.
+hook_guard_bash() {
+  local input cmd cwd f
+  input="$(cat)"
+  cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty')"
+  cwd="$(printf '%s' "$input" | jq -r '.cwd // empty')"
+  [ -n "$cmd" ] || exit 0
+
+  if printf '%s' "$cmd" | grep -Eq 'git[^|;&]* config[^|;&]* user\.(name|email)[[:space:]]+[^|;&[:space:]]|-c[[:space:]]+user\.(name|email)=|GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL)=|--author[= ]'; then
+    err "harness: автор коммитов берётся из harness.json и закреплён командой bin/harness init — менять его в команде нельзя (см. .claude/rules/git.md)." \
+        "harness: the commit author comes from harness.json and is pinned by bin/harness init — it cannot be changed in a command (see .claude/rules/git.md)."
+    exit 2
+  fi
+
+  printf '%s' "$cmd" | grep -Eq '(git[^|;&]*[[:space:]](commit|merge|tag|revert|cherry-pick|rebase)|gh[^|;&]*[[:space:]](pr|issue|release))([[:space:]]|$)' || exit 0
+
+  if printf '%s' "$cmd" | grep -Eiq "$AI_MARKERS"; then
+    err "harness: в сообщении коммита, тега или PR есть AI-атрибуция (Co-Authored-By, «Generated with», 🤖). Убери её и повтори (см. .claude/rules/git.md)." \
+        "harness: the commit, tag or PR text contains AI attribution (Co-Authored-By, \"Generated with\", 🤖). Remove it and retry (see .claude/rules/git.md)."
+    exit 2
+  fi
+
+  # Text passed as a file is checked by the file's contents.
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    [ "$f" = "-" ] && continue
+    case "$f" in /*) ;; *) f="$cwd/$f" ;; esac
+    if [ ! -f "$f" ]; then
+      err "harness: не могу проверить файл с текстом ($f). Укажи абсолютный путь к существующему файлу." \
+          "harness: cannot check the text file ($f). Give an absolute path to an existing file."
+      exit 2
+    fi
+    if grep -Eiq "$AI_MARKERS" "$f"; then
+      err "harness: в файле $f есть AI-атрибуция (Co-Authored-By, «Generated with», 🤖). Убери её и повтори." \
+          "harness: file $f contains AI attribution (Co-Authored-By, \"Generated with\", 🤖). Remove it and retry."
+      exit 2
+    fi
+  done < <(printf '%s' "$cmd" | grep -oE '[[:space:]](-F|--file|--body-file|--notes-file)[= ]+[^[:space:];|&]+' | sed -E 's/^[[:space:]]*(-F|--file|--body-file|--notes-file)[= ]+//' | tr -d "\"'")
+  exit 0
+}
+
+# ------------------------------------------------------------------------------
+
+case "${1:-}" in
+  init)            shift; cmd_init "$@" ;;
+  lang)            shift; cmd_lang "$@" ;;
+  version)         cmd_version ;;
+  doctor)          shift; cmd_doctor "$@" ;;
+  selfcheck)       cmd_selfcheck ;;
+  sync)            shift; cmd_sync "$@" ;;
+  status)          cmd_status ;;
+  servers)         cmd_servers ;;
+  server-check)    shift; cmd_server_check "$@" ;;
+  map)             shift; cmd_map "$@" ;;
+  repo-remove)     shift; cmd_repo_remove "$@" ;;
+  server-remove)   shift; cmd_server_remove "$@" ;;
+  service-remove)  shift; cmd_service_remove "$@" ;;
+  reset)           shift; cmd_reset "$@" ;;
+  check-commits)   shift; cmd_check_commits "$@" ;;
+  docker-up)       cmd_docker_up ;;
+  docker-check)    cmd_docker_check ;;
+  docker-clean)    cmd_docker_clean ;;
+  release-build)   shift; cmd_release_build "$@" ;;
+  release-publish) shift; cmd_release_publish "$@" ;;
+  hook)
+    case "${2:-}" in
+      session-start)  hook_session_start ;;
+      subagent-start) hook_subagent_start ;;
+      guard-bash)     hook_guard_bash ;;
+      update-check)   hook_update_check ;;
+      git-pre-commit) hook_git_pre_commit ;;
+      git-pre-push)   hook_git_pre_push ;;
+      *) err "неизвестный хук: ${2:-}" "unknown hook: ${2:-}"; exit 1 ;;
+    esac ;;
+  ""|-h|--help|help) usage ;;
+  *) err "неизвестная команда: $1" "unknown command: $1"; usage >&2; exit 1 ;;
+esac

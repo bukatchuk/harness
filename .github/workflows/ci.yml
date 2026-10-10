@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      HARNESS_LANG: en
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install shellcheck jq
+      - name: shellcheck
+        run: shellcheck bin/harness install.sh tests/smoke.sh
+      - name: Integrity of harness itself
+        run: bin/harness selfcheck
+      - name: Smoke test in a sandbox
+        run: tests/smoke.sh
+      - name: Public build and leak check
+        run: bin/harness release-build --preview

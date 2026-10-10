@@ -1,0 +1,16 @@
+# Project clones: each has its own repository
+/repos/
+
+# .claude/ is a deployed copy of i18n/<lang> plus local settings; only the shared settings are tracked
+/.claude/*
+!/.claude/settings.json
+
+# Public release builds and registry backups
+/dist/
+/.harness-backup/
+
+.DS_Store
+
+# harness: user data (created by bin/harness init, never committed here)
+/harness.json
+/registry/

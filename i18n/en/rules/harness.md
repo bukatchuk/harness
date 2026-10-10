@@ -1,0 +1,14 @@
+# Changing harness itself
+
+- Every commit to the harness repository raises the version: in the same commit increase `VERSION` and add an entry `## [X.Y.Z]` to `CHANGELOG.md` and to `CHANGELOG.en.md`. No exceptions — the git hooks from `.githooks/` reject a commit and a push without it.
+- The version is semver: patch — clarifications, fixes, registry additions; minor — new rules, skills, integrations; major — changes after which the old behavior breaks.
+- Do not modify the last commit with `--amend` — make a new commit with a new version.
+- After the commit, create an annotated tag with a description in the owner's language: `git tag -a v<version> -m "<what changed, 1–3 lines>"`. The git hook does not let a tag without a description through. Push the tag together with the branch.
+- For every tag create a GitHub release (this is a step of the `push` skill). The title is `v<version> — <summary>`. In the description list all the functionality changes included, under the sections "Added / Changed / Fixed / Removed", and give each item a link to an md file with details at the tag: `<repo URL>/blob/v<version>/<path>` — a link to a tag does not go stale. The repository URL: `gh repo view --json url -q .url`.
+- Edit rules, skills and cheat sheets only in `i18n/`, and in both languages at once: `i18n/ru/…` and `i18n/en/…` must match in file set and in meaning. The files in `.claude/` are a copy that `bin/harness lang` overwrites; run this command after editing. The composition of the language sets is checked by `bin/harness selfcheck` and a git hook.
+- Texts the CLI user sees are written in `bin/harness` as a pair: the Russian and the English variant side by side.
+- The core contains no owner data: names, addresses, identifiers and links live in `harness.json` and `registry/`. In rules, skills, cheat sheets, the README and code write "the owner" and take values from the settings. A changelog entry that names the owner's data is wrapped in `<!-- private -->` … `<!-- /private -->`: it does not make it into the public build.
+- The public release is built from the core with `bin/harness release-build` and published only through the `release-public` skill and only at the owner's request.
+- Keep harness thin. Before adding a rule, check: can this be solved with a script or a hook, and is a neighboring rule outdated. Delete a rule that is no longer needed.
+- Do not put the specifics of a single project into harness — they belong in that project's `CLAUDE.md`.
+- Every 15 minutes a hook checks whether `origin/main` has a new version. If it does, offer the owner to update in the current session. Update only through the `harness-update` skill and only with their consent; after a refusal, do not offer the same version again.
