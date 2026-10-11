@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.4.0] — 2026-10-11
+
+### Added
+
+- Telegram notification about a release: `.github/workflows/release-notify.yml` sends a message when a release is published on GitHub — title, time, notes and link. It needs two repository secrets, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`; without them the step is skipped. The notes go as plain text and are cut to 2500 characters.
+
 ## [1.3.1] — 2026-10-11
 
 ### Fixed

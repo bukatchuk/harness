@@ -206,6 +206,8 @@ Every 15 minutes a session checks whether a new version is out and offers to upd
 
 Every version is a tag, an entry in [CHANGELOG.en.md](CHANGELOG.en.md) and a release with an archive.
 
+You can get a Telegram message about every release: add the `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` secrets in the repository settings on GitHub (Settings → Secrets and variables → Actions). The message is sent by [release-notify.yml](.github/workflows/release-notify.yml); without the secrets it does nothing.
+
 ## FAQ
 
 **How is this different from a `CLAUDE.md` in every project?**

@@ -206,6 +206,8 @@ bin/harness <команда>
 
 Каждая версия — это тег, запись в [CHANGELOG.md](CHANGELOG.md) и релиз с архивом.
 
+О каждом релизе можно получать сообщение в Telegram: добавь в настройках репозитория на GitHub секреты `TELEGRAM_BOT_TOKEN` и `TELEGRAM_CHAT_ID` (Settings → Secrets and variables → Actions). Сообщение отправляет [release-notify.yml](.github/workflows/release-notify.yml); без секретов он ничего не делает.
+
 ## Вопросы
 
 **Чем это отличается от `CLAUDE.md` в каждом проекте?**

@@ -1,0 +1,56 @@
+name: Release notification
+
+# Sends a Telegram message when a release is published.
+# Needs two repository secrets: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.
+# Without them the job is skipped, so forks and fresh installs stay green.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  telegram:
+    runs-on: ubuntu-latest
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      REPO: ${{ github.repository }}
+      TAG: ${{ github.event.release.tag_name }}
+      TITLE: ${{ github.event.release.name }}
+      BODY: ${{ github.event.release.body }}
+      URL: ${{ github.event.release.html_url }}
+      PUBLISHED_AT: ${{ github.event.release.published_at }}
+    steps:
+      - name: Send the message
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is not set: nothing to send."
+            exit 0
+          fi
+
+          # Plain text, no parse_mode: release notes are free-form and would break Telegram markup.
+          # Markdown links become "text", headings lose "#", the notes are cut to fit one message.
+          # jq cuts by characters, not bytes: a split multibyte character would be rejected.
+          notes="$(printf '%s\n' "$BODY" | tr -d '\r' \
+            | sed -E 's/\[([^]]*)\]\([^)]*\)/\1/g; s/^#+ +//; s/<!--[^>]*-->//g' \
+            | cat -s \
+            | jq -Rrs 'sub("\\s+$"; "") | if length > 2500 then .[0:2500] + "…" else . end')"
+
+          text="$(printf '📦 %s — Release published\n\nRelease: %s\nTime: %s\n\n%s\n\n%s' \
+            "$REPO" "${TITLE:-$TAG}" "$PUBLISHED_AT" "$notes" "$URL")"
+
+          response="$(curl -sS --max-time 30 \
+            --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" \
+            --data-urlencode "text=$text" \
+            --data-urlencode "disable_web_page_preview=true" \
+            "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage")"
+
+          if [ "$(printf '%s' "$response" | jq -r '.ok')" = "true" ]; then
+            echo "Sent: message $(printf '%s' "$response" | jq -r '.result.message_id')."
+          else
+            echo "Telegram refused the message: $(printf '%s' "$response" | jq -r '.description // "no description"')"
+            exit 1
+          fi
