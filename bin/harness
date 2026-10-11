@@ -536,6 +536,10 @@ cmd_doctor() {
   if integration_on gitguardian; then any=1
     if [ -n "${GITGUARDIAN_TOKEN:-}" ]; then ok "GITGUARDIAN_TOKEN"; else warn "GITGUARDIAN_TOKEN $(t 'не задан в окружении' 'is not set in the environment')"; fi
   fi
+  if integration_on mailcow; then any=1
+    if [ -n "${MAILCOW_TOKEN:-}" ]; then ok "MAILCOW_TOKEN"; else warn "MAILCOW_TOKEN $(t 'не задан в окружении' 'is not set in the environment')"; fi
+    [ -n "$(conf '.integrations.mailcow.url')" ] || fail "$(t 'в harness.json нет integrations.mailcow.url' 'harness.json has no integrations.mailcow.url')"
+  fi
   if integration_on yandex_cloud && command -v yc >/dev/null 2>&1; then any=1
     if yc config profile list 2>/dev/null | grep -q ' ACTIVE$'; then ok "$(t 'профиль yc' 'yc profile')"; else warn "$(t 'нет активного профиля yc (вход: yc init)' 'no active yc profile (log in: yc init)')"; fi
   fi
@@ -610,6 +614,8 @@ cmd_doctor() {
     [ -n "$url" ] && [ -n "${PLANE_TOKEN:-}" ] && http_check "Plane" "${url%/}/api/v1/users/me/" "X-API-Key: $PLANE_TOKEN"
     url="$(conf '.integrations.n8n.url')"
     [ -n "$url" ] && [ -n "${N8N_TOKEN:-}" ] && http_check "n8n" "${url%/}/api/v1/workflows?limit=1" "X-N8N-API-KEY: $N8N_TOKEN"
+    url="$(conf '.integrations.mailcow.url')"
+    [ -n "$url" ] && [ -n "${MAILCOW_TOKEN:-}" ] && http_check "mailcow" "${url%/}/api/v1/get/status/version" "X-API-Key: $MAILCOW_TOKEN"
     integration_on gitguardian && [ -n "${GITGUARDIAN_TOKEN:-}" ] && http_check "GitGuardian" "https://api.gitguardian.com/v1/health" "Authorization: Token $GITGUARDIAN_TOKEN"
     if integration_on yandex_cloud && command -v yc >/dev/null 2>&1 && yc config profile list 2>/dev/null | grep -q ' ACTIVE$'; then
       if yc resource-manager cloud list --format json >/dev/null 2>&1; then

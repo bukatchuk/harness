@@ -2,6 +2,16 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [semver](https://semver.org/lang/ru/). English: [CHANGELOG.en.md](CHANGELOG.en.md).
 
+## [1.2.0] — 2026-10-11
+
+### Добавлено
+
+- Интеграция с mailcow: шпаргалка `.claude/integrations/mailcow.md` (вызов API, создание ящика, особенности ответов), токен `MAILCOW_TOKEN`, ключ `integrations.mailcow.url` в `harness.json`. `bin/harness doctor` проверяет наличие токена и доступ к API.
+
+### Изменено
+
+- Правило о секретах: `MAILCOW_TOKEN` добавлен к токенам окружения; создание и удаление ящиков и алиасов в mailcow — только после подтверждения владельца.
+
 ## [1.1.2] — 2026-10-11
 
 ### Изменено

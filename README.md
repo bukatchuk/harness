@@ -178,6 +178,7 @@ bin/harness <команда>
     "plane": { "url": "https://plane.example.com", "workspace": "team", "default_project": "MAIN", "default_project_id": "<id>" },
     "n8n": { "url": "https://n8n.example.com" },
     "gitguardian": {},
+    "mailcow": { "url": "https://mail.example.com" },
     "yandex_cloud": {}
   }
 }
@@ -189,6 +190,7 @@ bin/harness <команда>
 | n8n | чтение workflow и запусков; изменения — после подтверждения | `N8N_TOKEN` |
 | GitGuardian | поиск секретов перед каждым коммитом и в сборке релиза | `GITGUARDIAN_TOKEN` |
 | Yandex Cloud | чтение ресурсов; изменения — после подтверждения | профиль `yc` |
+| mailcow | чтение доменов, ящиков и алиасов; изменения — после подтверждения | `MAILCOW_TOKEN` |
 
 Токены живут только в переменных окружения. harness проверяет их наличие, но никогда не читает и не выводит значения.
 

@@ -178,6 +178,7 @@ The rest — pushes, changes on servers, actions in external services, handling 
     "plane": { "url": "https://plane.example.com", "workspace": "team", "default_project": "MAIN", "default_project_id": "<id>" },
     "n8n": { "url": "https://n8n.example.com" },
     "gitguardian": {},
+    "mailcow": { "url": "https://mail.example.com" },
     "yandex_cloud": {}
   }
 }
@@ -189,6 +190,7 @@ The rest — pushes, changes on servers, actions in external services, handling 
 | n8n | reading workflows and executions; changes after a confirmation | `N8N_TOKEN` |
 | GitGuardian | secret scanning before every commit and in the release build | `GITGUARDIAN_TOKEN` |
 | Yandex Cloud | reading resources; changes after a confirmation | the `yc` profile |
+| mailcow | reading domains, mailboxes and aliases; changes after a confirmation | `MAILCOW_TOKEN` |
 
 Tokens live in environment variables only. harness checks that they are present but never reads or prints their values.
 
