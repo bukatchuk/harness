@@ -126,7 +126,7 @@ Call them in a session with `/name` or just ask: "commit", "open a PR", "take th
 | `/harness-doctor` | A full environment check with real requests; a next step for every problem. |
 | `/harness-update` | Shows what will change, waits for consent and updates harness in the running session. |
 | `/harness-reset` | Returns the registry to its initial state: a plan first, then a confirmation, and a backup before the change. |
-| `/release-public` | Builds the open version without your data, scans it for leaks and publishes after a confirmation. |
+| `/release-public` | Builds the open version without your data, scans it for leaks and publishes after a confirmation — or right after every release if `release.auto_publish` is on in `harness.json`. |
 
 ## CLI
 

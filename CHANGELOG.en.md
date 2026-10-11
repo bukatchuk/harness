@@ -2,6 +2,35 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.3.1] — 2026-10-11
+
+### Fixed
+
+- Changelog: two entries used the name of a registry link, and the leak check of the public build rejected them. The entries are reworded; versions 1.2.2, 1.2.3 and 1.3.0 are not published separately, their changes are part of this one.
+
+## [1.3.0] — 2026-10-11
+
+### Added
+
+- Auto-publishing of the open version: with `release.auto_publish: true` in `harness.json` the public release goes out right after every successful release of the private repository, without a reminder from the owner. The `push` skill runs `release-public` itself; in this mode `release-public` does not ask for consent, but stops on a leak and on unexpected files in the build.
+- The `release-public` skill: how to catch up when the public repository is several versions behind.
+
+### Changed
+
+- The rule on changing harness: a public release is no longer "only at the owner's request" — with auto-publishing on, it is required after every release.
+
+## [1.2.3] — 2026-10-11
+
+### Changed
+
+- Registry of this install: the entry about metrics collection was extended.
+
+## [1.2.2] — 2026-10-11
+
+### Changed
+
+- Registry of this install: the entry about metrics collection was brought up to date.
+
 ## [1.2.1] — 2026-10-11
 
 ### Changed

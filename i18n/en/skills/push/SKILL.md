@@ -13,4 +13,5 @@ Push the commits. Arguments: $ARGUMENTS
 5. Push: `git -C <path> push` (for a new branch, `git push -u origin <branch>`). For harness, push the version tag too: `git push origin <branch> v<version>`; a push of commits without a version bump is rejected by the git hook.
 6. If the push is rejected because the remote branch has moved ahead, run `git pull --rebase` and repeat. `--force` and `--force-with-lease` only with the owner's explicit consent to that specific push.
 7. For harness, create a release for each pushed tag: `gh release create v<version> --verify-tag --title "v<version> — <summary>" --notes "<description>"`. The description is in the owner's language, lists all functionality changes with links to md files; the format is in `.claude/rules/harness.md`.
-8. Report the result: the branch, the number of pushed commits, the link to the repository or release.
+8. For harness: if `harness.json` has `release.auto_publish: true`, release this version publicly right away through the `release-public` skill — without a reminder from the owner.
+9. Report the result: the branch, the number of pushed commits, the link to the repository or release; for harness, also the link to the public release.
