@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.5.5] — 2026-10-12
+
+### Changed
+
+- Registry of this installation: a new project and a second address of one server. A server entry may now carry the optional `ipv4_extra` field — a list of additional IPv4 addresses.
+
 ## [1.5.4] — 2026-10-12
 
 ### Changed
