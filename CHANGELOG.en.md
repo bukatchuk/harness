@@ -2,6 +2,16 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.6.0] — 2026-10-13
+
+### Added
+
+- Protection of the clones from parallel sessions. A session that starts changing a clone in `repos/` holds it; for another session the hook refuses git commands and file edits in that clone and offers a separate working copy. A clone on its main branch with no uncommitted changes is free. The rule is in [.claude/rules/git.md](i18n/en/rules/git.md), section "Neighbouring sessions".
+- Commands `bin/harness worktree <name> <branch> [--remove]`, `bin/harness locks` and `bin/harness unlock <name>`.
+- The `guard-edit` hook for the file editing tools: the same check as for Bash commands.
+- Only the branches created in this session and named one by one can be deleted: the hook refuses deletion by a list, through a variable or with `xargs`.
+- `bin/harness selfcheck` checks all of this with two mock sessions and throwaway clones.
+
 ## [1.5.10] — 2026-10-13
 
 ### Changed

@@ -182,6 +182,8 @@ bin/harness <command>
 | `reset [--delete-clones] [--yes]` | Empties the registry. Without `--yes` it only prints the plan. |
 | `check-commits [path]` | Author, committer and AI attribution in unpushed commits. |
 | `docker-up`, `docker-check`, `docker-clean` | Start the daemon and clean up the resources created by harness. |
+| `locks`, `unlock <name>` | Clones held by parallel sessions, and removing a lock when the owner says so. |
+| `worktree <name> <branch> [--remove]` | A separate working copy of a clone for a session that did not get the clone. |
 | `selfcheck` | Integrity of harness itself. |
 | `release-build`, `release-publish` | Build and publish the open version. |
 

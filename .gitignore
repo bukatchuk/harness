@@ -1,6 +1,9 @@
 # Project clones: each has its own repository
 /repos/
 
+# Separate working copies of the clones for parallel sessions
+/worktrees/
+
 # .claude/ is a deployed copy of i18n/<lang> plus local settings; only the shared settings are tracked
 /.claude/*
 !/.claude/settings.json

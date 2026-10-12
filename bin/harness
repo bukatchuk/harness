@@ -9,7 +9,8 @@ CONF="$ROOT/harness.json"
 REGISTRY="$ROOT/registry/repos.json"
 SERVERS="$ROOT/registry/servers.json"
 SERVICES="$ROOT/registry/services.json"
-REPOS_DIR="$ROOT/repos"
+REPOS_DIR="${HARNESS_REPOS_DIR:-$ROOT/repos}"
+WORKTREES_DIR="$ROOT/worktrees"
 I18N="$ROOT/i18n"
 ACTIVE="$ROOT/.claude"
 SETTINGS="$ACTIVE/settings.json"
@@ -20,6 +21,12 @@ DIST="$ROOT/dist"
 
 # How often a running session checks origin for a new version, in seconds.
 UPDATE_CHECK_INTERVAL=900
+# A clone with uncommitted changes stays held for this long after the last command of its session.
+LOCK_TTL=1800
+# GIT_MOVING takes the working copy off its branch or rewrites it; GIT_MUTATING adds the commands
+# that only continue the work in the current branch.
+GIT_MOVING='git[^|;&]*[[:space:]](switch|checkout|merge|pull|reset|rebase|cherry-pick|revert|restore|clean|am|apply)([[:space:]]|$)|git[^|;&]*[[:space:]]stash([[:space:]]+(push|pop|apply|drop|clear|save|-)|[[:space:]]*($|[;&|]))|git[^|;&]*[[:space:]]branch[^|;&]*[[:space:]](-[dDmMfF]|--delete|--move|--force)([[:space:]]|$)|gh[^|;&]*[[:space:]]pr[[:space:]]+(merge|checkout)([[:space:]]|$)'
+GIT_MUTATING="$GIT_MOVING"'|git[^|;&]*[[:space:]](add|commit|rm|mv)([[:space:]]|$)'
 
 # AI attribution markers that are forbidden in commits and PRs.
 AI_MARKERS='co-authored-by:.*(claude|anthropic|copilot|openai|codex|cursor|gemini)|generated with.*(claude|codex|cursor|copilot|gemini)|noreply@anthropic\.com|🤖'
@@ -85,6 +92,12 @@ Git и Docker
   docker-check             показать ресурсы Docker, оставшиеся от harness
   docker-clean             удалить ресурсы Docker, созданные harness
 
+Параллельные сессии
+  locks                    клоны в repos/, занятые сессиями
+  unlock <имя>             снять блокировку клона (только по слову владельца)
+  worktree <имя> <ветка> [--remove]
+                           отдельная рабочая копия клона для параллельной сессии
+
 Публичный релиз
   release-build [--preview]   собрать открытую версию без данных владельца и проверить на утечки
   release-publish [--push]    показать или отправить релиз в публичный репозиторий
@@ -118,6 +131,12 @@ Git and Docker
   docker-up                start the Docker daemon and wait until it is ready
   docker-check             show Docker resources left behind by harness
   docker-clean             remove Docker resources created by harness
+
+Parallel sessions
+  locks                    clones in repos/ held by sessions
+  unlock <name>            remove the lock of a clone (only when the owner says so)
+  worktree <name> <branch> [--remove]
+                           a separate working copy of a clone for a parallel session
 
 Public release
   release-build [--preview]   build the open version without owner data and scan it for leaks
@@ -1057,8 +1076,53 @@ cmd_selfcheck() {
     if bash -n "$ROOT/$f" 2>/dev/null; then ok "bash -n $f"; else fail "bash -n $f"; fi
   done
 
+  section "$(t 'Блокировки клонов' 'Clone locks')"
+  selfcheck_locks
+
   say "Итог: ошибок $ERRORS" "Result: errors $ERRORS"
   [ "$ERRORS" -eq 0 ]
+}
+
+# Two sessions on throwaway clones: the second one is refused, a foreign branch survives.
+selfcheck_locks() {
+  local tmp r rc
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/harness-locks.XXXXXX")" || { fail "mktemp"; return; }
+  r="$tmp/repos"
+  mkdir -p "$r" "$tmp/state"
+  for rc in alpha beta; do
+    git init -q -b main "$r/$rc" 2>/dev/null && git -C "$r/$rc" -c user.name=selfcheck -c user.email=selfcheck@localhost commit -q --allow-empty -m init
+  done
+  # lock_case <expected code> <label> <session> <cwd> <command>
+  lock_case() {
+    jq -n --arg s "$3" --arg d "$4" --arg c "$5" '{session_id: $s, cwd: $d, tool_input: {command: $c}}' \
+      | HARNESS_REPOS_DIR="$r" HARNESS_STATE_DIR="$tmp/state" "$ROOT/bin/harness" hook guard-bash >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" -eq "$1" ]; then ok "$2"; else fail "$2 ($(t "код $rc вместо $1" "code $rc instead of $1"))"; fi
+  }
+  edit_case() {
+    jq -n --arg s "$3" --arg f "$4" '{session_id: $s, tool_input: {file_path: $f}}' \
+      | HARNESS_REPOS_DIR="$r" HARNESS_STATE_DIR="$tmp/state" "$ROOT/bin/harness" hook guard-edit >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" -eq "$1" ]; then ok "$2"; else fail "$2 ($(t "код $rc вместо $1" "code $rc instead of $1"))"; fi
+  }
+  lock_case 0 "$(t 'сессия берёт свободный клон' 'a session takes a free clone')" A "$r" "git -C alpha switch -c feat-a"
+  git -C "$r/alpha" switch -q -c feat-a
+  lock_case 0 "$(t 'чтение чужого клона разрешено' 'reading a held clone is allowed')" B "$r" "git -C alpha log --oneline -1"
+  lock_case 2 "$(t 'вторая сессия не уводит клон с чужой ветки' 'a second session cannot take the clone off a foreign branch')" B "$r" "git -C alpha switch main"
+  lock_case 2 "$(t 'цикл по клонам тоже отклонён' 'a loop over clones is refused too')" B "$r" 'for x in alpha beta; do git -C $x switch -q main; done'
+  edit_case 2 "$(t 'правка файла в чужом клоне отклонена' 'editing a file in a held clone is refused')" B "$r/alpha/file.txt"
+  lock_case 0 "$(t 'хозяин клона продолжает работу' 'the holder goes on working')" A "$r/alpha" "git commit -m x"
+  lock_case 2 "$(t 'чужую ветку удалить нельзя' 'a foreign branch cannot be deleted')" A "$r" "git -C alpha branch -D other"
+  lock_case 2 "$(t 'удаление веток списком отклонено' 'deleting branches by a list is refused')" A "$r" "git -C alpha branch | xargs git -C alpha branch -D"
+  lock_case 0 "$(t 'свою ветку удалить можно' 'the own branch can be deleted')" A "$r" "git -C alpha branch -D feat-a"
+  git -C "$r/alpha" switch -q main
+  lock_case 0 "$(t 'клон на основной ветке без правок свободен' 'a clean clone on its main branch is free')" B "$r" "git -C alpha switch -c feat-b"
+  git -C "$r/beta" switch -q -c orphan
+  lock_case 2 "$(t 'клон на ветке без хозяина нельзя увести с неё' 'a clone on a branch with no holder cannot be taken off it')" C "$r" "git -C beta stash"
+  edit_case 0 "$(t 'в ветке без хозяина работу можно продолжить' 'work may go on in a branch with no holder')" D "$r/beta/file.txt"
+  lock_case 0 "$(t 'команда в отдельной рабочей копии не блокируется' 'a command in a separate working copy is not blocked')" Z "$WORKTREES_DIR/alpha/x" "git commit -m y"
+  unset -f lock_case edit_case
+  rm -rf "$tmp"
 }
 
 # --- public release -----------------------------------------------------------
@@ -1424,13 +1488,196 @@ hook_subagent_start() {
     '{hookSpecificOutput: {hookEventName: "SubagentStart", additionalContext: $c}}'
 }
 
-# PreToolUse for Bash: does not let anyone swap the author or add AI attribution.
+# --- repository locks ---------------------------------------------------------
+# Several sessions share the clones in repos/. A session that starts changing a clone takes it:
+# another session is refused and works in its own worktree instead (bin/harness worktree).
+
+lock_dir() {
+  local dir
+  dir="${HARNESS_STATE_DIR:-$(git -C "$ROOT" rev-parse --absolute-git-dir 2>/dev/null)/harness}/locks"
+  mkdir -p "$dir" 2>/dev/null
+  echo "$dir"
+}
+
+repo_default_branch() {
+  local name="$1" b=""
+  [ -f "$REGISTRY" ] && b="$(jq -r --arg n "$name" '.repos[]? | select(.name == $n) | .branch // empty' "$REGISTRY" 2>/dev/null)"
+  [ -n "$b" ] || b="$(git -C "$REPOS_DIR/$name" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')"
+  echo "${b:-main}"
+}
+
+# Names of the clones a command works with: the current directory, explicit repos/<name> paths
+# and, when the command runs in repos/ itself or mentions it, bare clone names (loops over clones).
+touched_repos() {
+  local cmd="$1" cwd="$2" n
+  {
+    if [ "${cwd#"$REPOS_DIR"/}" != "$cwd" ]; then n="${cwd#"$REPOS_DIR"/}"; echo "${n%%/*}"; fi
+    printf '%s' "$cmd" | grep -oE '(^|[^A-Za-z0-9._-])repos/[A-Za-z0-9._-]+' | sed -E 's|.*repos/||'
+    if [ "$cwd" = "$REPOS_DIR" ] || printf '%s' "$cmd" | grep -Eq "(^|[^A-Za-z0-9._-])repos/?([\"'[:space:];&|)]|\$)"; then
+      for n in "$REPOS_DIR"/*/; do
+        n="$(basename "$n")"
+        printf '%s' "$cmd" | grep -Eq "(^|[[:space:]\"'=(/])$(printf '%s' "$n" | sed 's/[.]/\\./g')([[:space:]\"';)/]|\$)" && echo "$n"
+      done
+    fi
+  } | sort -u | while IFS= read -r n; do
+    [ -n "$n" ] && [ -e "$REPOS_DIR/$n/.git" ] && echo "$n"
+  done
+}
+
+# repo_blocked <name> <session> [stay] — true when another session holds the clone. Sets LOCK_WHO,
+# LOCK_BRANCH and LOCK_AGE for the message. A clone on its main branch with a clean tree is free.
+# A clone left on a branch with no lock at all has an unknown owner: work may go on in that branch
+# ("stay": edits, add, commit), but nothing may take the clone off it.
+repo_blocked() {
+  local name="$1" sid="$2" stay="${3:-}" file lsid="" lts=0 lbr="" branch dirty now
+  file="$(lock_dir)/$name"
+  [ -f "$file" ] && read -r lsid lts lbr < "$file"
+  [ "$lsid" = "$sid" ] && return 1
+  [ "$lsid" = "-" ] && return 1                       # released by the owner: bin/harness unlock
+  branch="$(git -C "$REPOS_DIR/$name" branch --show-current 2>/dev/null)"
+  dirty="$(git -C "$REPOS_DIR/$name" status --porcelain 2>/dev/null | head -1)"
+  now="$(date +%s)"
+  LOCK_WHO="${lsid:0:8}"; LOCK_BRANCH="${branch:-detached HEAD}"; LOCK_AGE=$(( (now - ${lts:-0}) / 60 ))
+  if [ "$branch" != "$(repo_default_branch "$name")" ]; then
+    [ -n "$lsid" ] && return 0
+    LOCK_WHO="?"; LOCK_AGE="?"
+    [ -n "$stay" ] && return 1
+    return 0
+  fi
+  [ -n "$dirty" ] && [ -n "$lsid" ] && [ $((now - ${lts:-0})) -lt "$LOCK_TTL" ] && return 0
+  return 1
+}
+
+lock_take() {
+  printf '%s %s %s\n' "$2" "$(date +%s)" "$(git -C "$REPOS_DIR/$1" branch --show-current 2>/dev/null)" > "$(lock_dir)/$1"
+}
+
+lock_refuse() {
+  err "harness: в repos/$1 работает другая сессия (сессия $LOCK_WHO, ветка $LOCK_BRANCH, активность $LOCK_AGE мин назад). Её ветку и файлы не трогай. Работай в своей копии: bin/harness worktree $1 <ветка> — и дальше в каталоге, который она напечатает. Блокировку сам не снимай (см. .claude/rules/git.md)." \
+      "harness: another session works in repos/$1 (session $LOCK_WHO, branch $LOCK_BRANCH, active $LOCK_AGE min ago). Leave its branch and files alone. Work in your own copy: bin/harness worktree $1 <branch> — then in the directory it prints. Do not remove the lock yourself (see .claude/rules/git.md)."
+}
+
+# guard_repos <session> <command> <cwd> — the part of the Bash guard that protects shared clones.
+guard_repos() {
+  local sid="$1" cmd="$2" cwd="$3" name b args file lsid mine stay=""
+  mine="$(lock_dir)/branches-$(printf '%s' "$sid" | tr -cd 'A-Za-z0-9_-')"
+
+  # Branches this session creates are remembered: only they may be deleted later.
+  {
+    printf '%s' "$cmd" | grep -oE '(switch|checkout)[^|;&]*[[:space:]]-[cCbB][[:space:]]+[^[:space:];|&]+' | sed -E 's/.*[[:space:]]-[cCbB][[:space:]]+//'
+    printf '%s' "$cmd" | grep -oE 'worktree[[:space:]]+add[^|;&]*[[:space:]]-[bB][[:space:]]+[^[:space:];|&]+' | sed -E 's/.*[[:space:]]-[bB][[:space:]]+//'
+    printf '%s' "$cmd" | grep -oE 'harness"?[[:space:]]+worktree[[:space:]]+[^[:space:];|&]+[[:space:]]+[^[:space:];|&-][^[:space:];|&]*' | awk '{print $NF}'
+  } | tr -d "\"'" | grep -v '[$`{]' >> "$mine" 2>/dev/null
+
+  if printf '%s' "$cmd" | grep -Eq 'git[^|;&]*[[:space:]]branch[^|;&]*[[:space:]](-[dD]|--delete)([[:space:]]|$)'; then
+    args="$(printf '%s' "$cmd" | grep -oE 'branch[^|;&]*[[:space:]](-[dD]|--delete)[^;|&]*' | sed -E 's/^branch[^|;&]*[[:space:]](-[dD]|--delete)//' | tr -d "\"'")"
+    [ -n "$(printf '%s' "$args" | tr -d '[:space:]')" ] || args='$'
+    for b in $args; do
+      case "$b" in -*|*'>'*|*'<'*) continue ;; esac
+      if printf '%s' "$b" | grep -q '[$`{]' || ! grep -qxF "$b" "$mine" 2>/dev/null; then
+        err "harness: ветку «$b» создала не эта сессия — удалять её нельзя. Удаляй только свои ветки и называй их поимённо (см. .claude/rules/git.md)." \
+            "harness: branch \"$b\" was not created by this session — it must not be deleted. Delete only your own branches and name each one (see .claude/rules/git.md)."
+        exit 2
+      fi
+    done
+  fi
+
+  case "$cwd/" in "$WORKTREES_DIR"/*) return 0 ;; esac
+
+  if ! printf '%s' "$cmd" | grep -Eq "$GIT_MUTATING"; then
+    # Reading is free; it only shows that the session holding the clone is still alive.
+    while IFS= read -r name; do
+      file="$(lock_dir)/$name"; lsid=""
+      [ -f "$file" ] && read -r lsid _ < "$file"
+      [ "$lsid" = "$sid" ] && lock_take "$name" "$sid"
+    done < <(touched_repos "$cmd" "$cwd")
+    return 0
+  fi
+
+  printf '%s' "$cmd" | grep -Eq "$GIT_MOVING" || stay=1
+  while IFS= read -r name; do
+    if repo_blocked "$name" "$sid" "$stay"; then lock_refuse "$name"; exit 2; fi
+    lock_take "$name" "$sid"
+  done < <(touched_repos "$cmd" "$cwd")
+}
+
+# PreToolUse for Edit, Write and NotebookEdit: the same protection for direct file edits.
+hook_guard_edit() {
+  local input sid path name
+  input="$(cat)"
+  sid="$(printf '%s' "$input" | jq -r '.session_id // "default"')"
+  path="$(printf '%s' "$input" | jq -r '.tool_input.file_path // .tool_input.notebook_path // empty')"
+  [ "${path#"$REPOS_DIR"/}" != "$path" ] || exit 0
+  name="${path#"$REPOS_DIR"/}"; name="${name%%/*}"
+  [ -e "$REPOS_DIR/$name/.git" ] || exit 0
+  if repo_blocked "$name" "$sid" stay; then lock_refuse "$name"; exit 2; fi
+  lock_take "$name" "$sid"
+  exit 0
+}
+
+cmd_locks() {
+  local file name lsid lts lbr branch state rows="" now
+  now="$(date +%s)"
+  for file in "$(lock_dir)"/*; do
+    [ -f "$file" ] || continue
+    name="$(basename "$file")"
+    case "$name" in branches-*) continue ;; esac
+    [ -d "$REPOS_DIR/$name" ] || continue
+    read -r lsid lts lbr < "$file"
+    [ "$lsid" = "-" ] && continue
+    branch="$(git -C "$REPOS_DIR/$name" branch --show-current 2>/dev/null)"
+    state="$(t 'чисто' 'clean')"
+    [ -z "$(git -C "$REPOS_DIR/$name" status --porcelain 2>/dev/null | head -1)" ] || state="$(t 'есть правки' 'has changes')"
+    if [ "$branch" = "$(repo_default_branch "$name")" ] && [ "$state" = "$(t 'чисто' 'clean')" ]; then continue; fi
+    rows="$rows$name$US${lsid:0:8}$US${branch:-detached}$US$state$US$(( (now - ${lts:-0}) / 60 ))"$'\n'
+  done
+  if [ -z "$rows" ]; then say "Занятых клонов нет." "No clones are held."; return 0; fi
+  printf '%s\n%s' "$(t "РЕПОЗИТОРИЙ${US}СЕССИЯ${US}ВЕТКА${US}СОСТОЯНИЕ${US}МИНУТ НАЗАД" "REPOSITORY${US}SESSION${US}BRANCH${US}STATE${US}MINUTES AGO")" "$rows" | print_table
+}
+
+cmd_unlock() {
+  local name="${1:-}"
+  [ -n "$name" ] && [ -d "$REPOS_DIR/$name" ] || { err "укажи имя клона из repos/" "give the name of a clone in repos/"; exit 1; }
+  printf -- '- %s -\n' "$(date +%s)" > "$(lock_dir)/$name"
+  say "Блокировка repos/$name снята: клон возьмёт первая сессия, которая начнёт в нём работать." \
+      "The lock on repos/$name is removed: the first session that starts working there takes the clone."
+}
+
+# worktree <repo> <branch> [--remove] — a separate working copy of a clone for a parallel session.
+cmd_worktree() {
+  local name="${1:-}" branch="${2:-}" remove="${3:-}" dir path def
+  [ -n "$name" ] && [ -n "$branch" ] || { err "использование: bin/harness worktree <репозиторий> <ветка> [--remove]" "usage: bin/harness worktree <repository> <branch> [--remove]"; exit 1; }
+  dir="$REPOS_DIR/$name"
+  [ -e "$dir/.git" ] || { err "в repos/ нет клона «$name»" "there is no clone \"$name\" in repos/"; exit 1; }
+  path="$WORKTREES_DIR/$name/$(printf '%s' "$branch" | tr -c 'A-Za-z0-9._-' '-')"
+  if [ "$remove" = "--remove" ]; then
+    git -C "$dir" worktree remove "$path" || exit 1
+    say "Рабочая копия удалена: $path" "The working copy is removed: $path"
+    return 0
+  fi
+  if [ -d "$path" ]; then echo "$path"; return 0; fi
+  mkdir -p "$(dirname "$path")"
+  git -C "$dir" fetch --quiet origin 2>/dev/null
+  if git -C "$dir" show-ref --verify --quiet "refs/heads/$branch"; then
+    git -C "$dir" worktree add --quiet "$path" "$branch" || exit 1
+  else
+    def="$(repo_default_branch "$name")"
+    git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/$def" && def="origin/$def"
+    git -C "$dir" worktree add --quiet -b "$branch" "$path" "$def" || exit 1
+  fi
+  echo "$path"
+}
+
+# PreToolUse for Bash: does not let anyone swap the author or add AI attribution,
+# and keeps sessions out of the clones other sessions work in.
 hook_guard_bash() {
   local input cmd cwd f
   input="$(cat)"
   cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty')"
   cwd="$(printf '%s' "$input" | jq -r '.cwd // empty')"
   [ -n "$cmd" ] || exit 0
+
+  guard_repos "$(printf '%s' "$input" | jq -r '.session_id // "default"')" "$cmd" "$cwd"
 
   if printf '%s' "$cmd" | grep -Eq 'git[^|;&]* config[^|;&]* user\.(name|email)[[:space:]]+[^|;&[:space:]]|-c[[:space:]]+user\.(name|email)=|GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL)=|--author[= ]'; then
     err "harness: автор коммитов берётся из harness.json и закреплён командой bin/harness init — менять его в команде нельзя (см. .claude/rules/git.md)." \
@@ -1486,6 +1733,9 @@ case "${1:-}" in
   docker-up)       cmd_docker_up ;;
   docker-check)    cmd_docker_check ;;
   docker-clean)    cmd_docker_clean ;;
+  locks)           cmd_locks ;;
+  unlock)          shift; cmd_unlock "$@" ;;
+  worktree)        shift; cmd_worktree "$@" ;;
   release-build)   shift; cmd_release_build "$@" ;;
   release-publish) shift; cmd_release_publish "$@" ;;
   hook)
@@ -1493,6 +1743,7 @@ case "${1:-}" in
       session-start)  hook_session_start ;;
       subagent-start) hook_subagent_start ;;
       guard-bash)     hook_guard_bash ;;
+      guard-edit)     hook_guard_edit ;;
       update-check)   hook_update_check ;;
       git-pre-commit) hook_git_pre_commit ;;
       git-pre-push)   hook_git_pre_push ;;
