@@ -2,6 +2,12 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [semver](https://semver.org/lang/ru/). English: [CHANGELOG.en.md](CHANGELOG.en.md).
 
+## [1.5.3] — 2026-10-12
+
+### Изменено
+
+- Настройки этой установки: интеграция Yandex Cloud отключена — ключ `integrations.yandex_cloud` убран из `harness.json`. `bin/harness doctor` больше не проверяет утилиту `yc`, её профиль и доступ к облаку. Чтобы включить снова, верни ключ и войди через `yc init` (см. `.claude/integrations/yandex-cloud.md`).
+
 ## [1.5.2] — 2026-10-12
 
 ### Изменено
