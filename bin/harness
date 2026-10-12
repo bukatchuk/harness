@@ -1500,10 +1500,10 @@ lock_dir() {
 }
 
 repo_default_branch() {
-  local name="$1" b=""
-  [ -f "$REGISTRY" ] && b="$(jq -r --arg n "$name" '.repos[]? | select(.name == $n) | .branch // empty' "$REGISTRY" 2>/dev/null)"
-  [ -n "$b" ] || b="$(git -C "$REPOS_DIR/$name" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')"
-  echo "${b:-main}"
+  local name="$1" def=""
+  [ -f "$REGISTRY" ] && def="$(jq -r --arg n "$name" '.repos[]? | select(.name == $n) | .branch // empty' "$REGISTRY" 2>/dev/null)"
+  [ -n "$def" ] || def="$(git -C "$REPOS_DIR/$name" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')"
+  echo "${def:-main}"
 }
 
 # Names of the clones a command works with: the current directory, explicit repos/<name> paths
@@ -1529,9 +1529,9 @@ touched_repos() {
 # A clone left on a branch with no lock at all has an unknown owner: work may go on in that branch
 # ("stay": edits, add, commit), but nothing may take the clone off it.
 repo_blocked() {
-  local name="$1" sid="$2" stay="${3:-}" file lsid="" lts=0 lbr="" branch dirty now
+  local name="$1" sid="$2" stay="${3:-}" file lsid="" lts=0 branch dirty now
   file="$(lock_dir)/$name"
-  [ -f "$file" ] && read -r lsid lts lbr < "$file"
+  [ -f "$file" ] && read -r lsid lts _ < "$file"
   [ "$lsid" = "$sid" ] && return 1
   [ "$lsid" = "-" ] && return 1                       # released by the owner: bin/harness unlock
   branch="$(git -C "$REPOS_DIR/$name" branch --show-current 2>/dev/null)"
@@ -1559,7 +1559,7 @@ lock_refuse() {
 
 # guard_repos <session> <command> <cwd> — the part of the Bash guard that protects shared clones.
 guard_repos() {
-  local sid="$1" cmd="$2" cwd="$3" name b args file lsid mine stay=""
+  local sid="$1" cmd="$2" cwd="$3" name br args file lsid mine stay=""
   mine="$(lock_dir)/branches-$(printf '%s' "$sid" | tr -cd 'A-Za-z0-9_-')"
 
   # Branches this session creates are remembered: only they may be deleted later.
@@ -1572,11 +1572,11 @@ guard_repos() {
   if printf '%s' "$cmd" | grep -Eq 'git[^|;&]*[[:space:]]branch[^|;&]*[[:space:]](-[dD]|--delete)([[:space:]]|$)'; then
     args="$(printf '%s' "$cmd" | grep -oE 'branch[^|;&]*[[:space:]](-[dD]|--delete)[^;|&]*' | sed -E 's/^branch[^|;&]*[[:space:]](-[dD]|--delete)//' | tr -d "\"'")"
     [ -n "$(printf '%s' "$args" | tr -d '[:space:]')" ] || args='$'
-    for b in $args; do
-      case "$b" in -*|*'>'*|*'<'*) continue ;; esac
-      if printf '%s' "$b" | grep -q '[$`{]' || ! grep -qxF "$b" "$mine" 2>/dev/null; then
-        err "harness: ветку «$b» создала не эта сессия — удалять её нельзя. Удаляй только свои ветки и называй их поимённо (см. .claude/rules/git.md)." \
-            "harness: branch \"$b\" was not created by this session — it must not be deleted. Delete only your own branches and name each one (see .claude/rules/git.md)."
+    for br in $args; do
+      case "$br" in -*|*'>'*|*'<'*) continue ;; esac
+      if printf '%s' "$br" | grep -q '[$`{]' || ! grep -qxF "$br" "$mine" 2>/dev/null; then
+        err "harness: ветку «$br» создала не эта сессия — удалять её нельзя. Удаляй только свои ветки и называй их поимённо (см. .claude/rules/git.md)." \
+            "harness: branch \"$br\" was not created by this session — it must not be deleted. Delete only your own branches and name each one (see .claude/rules/git.md)."
         exit 2
       fi
     done
@@ -1616,28 +1616,28 @@ hook_guard_edit() {
 }
 
 cmd_locks() {
-  local file name lsid lts lbr branch state rows="" now
+  local file name lsid lts branch state list="" now
   now="$(date +%s)"
   for file in "$(lock_dir)"/*; do
     [ -f "$file" ] || continue
     name="$(basename "$file")"
     case "$name" in branches-*) continue ;; esac
     [ -d "$REPOS_DIR/$name" ] || continue
-    read -r lsid lts lbr < "$file"
+    read -r lsid lts _ < "$file"
     [ "$lsid" = "-" ] && continue
     branch="$(git -C "$REPOS_DIR/$name" branch --show-current 2>/dev/null)"
     state="$(t 'чисто' 'clean')"
     [ -z "$(git -C "$REPOS_DIR/$name" status --porcelain 2>/dev/null | head -1)" ] || state="$(t 'есть правки' 'has changes')"
     if [ "$branch" = "$(repo_default_branch "$name")" ] && [ "$state" = "$(t 'чисто' 'clean')" ]; then continue; fi
-    rows="$rows$name$US${lsid:0:8}$US${branch:-detached}$US$state$US$(( (now - ${lts:-0}) / 60 ))"$'\n'
+    list="$list$name$US${lsid:0:8}$US${branch:-detached}$US$state$US$(( (now - ${lts:-0}) / 60 ))"$'\n'
   done
-  if [ -z "$rows" ]; then say "Занятых клонов нет." "No clones are held."; return 0; fi
-  printf '%s\n%s' "$(t "РЕПОЗИТОРИЙ${US}СЕССИЯ${US}ВЕТКА${US}СОСТОЯНИЕ${US}МИНУТ НАЗАД" "REPOSITORY${US}SESSION${US}BRANCH${US}STATE${US}MINUTES AGO")" "$rows" | print_table
+  if [ -z "$list" ]; then say "Занятых клонов нет." "No clones are held."; return 0; fi
+  printf '%s\n%s' "$(t "РЕПОЗИТОРИЙ${US}СЕССИЯ${US}ВЕТКА${US}СОСТОЯНИЕ${US}МИНУТ НАЗАД" "REPOSITORY${US}SESSION${US}BRANCH${US}STATE${US}MINUTES AGO")" "$list" | print_table
 }
 
 cmd_unlock() {
   local name="${1:-}"
-  [ -n "$name" ] && [ -d "$REPOS_DIR/$name" ] || { err "укажи имя клона из repos/" "give the name of a clone in repos/"; exit 1; }
+  if [ -z "$name" ] || [ ! -d "$REPOS_DIR/$name" ]; then err "укажи имя клона из repos/" "give the name of a clone in repos/"; exit 1; fi
   printf -- '- %s -\n' "$(date +%s)" > "$(lock_dir)/$name"
   say "Блокировка repos/$name снята: клон возьмёт первая сессия, которая начнёт в нём работать." \
       "The lock on repos/$name is removed: the first session that starts working there takes the clone."
@@ -1646,7 +1646,7 @@ cmd_unlock() {
 # worktree <repo> <branch> [--remove] — a separate working copy of a clone for a parallel session.
 cmd_worktree() {
   local name="${1:-}" branch="${2:-}" remove="${3:-}" dir path def
-  [ -n "$name" ] && [ -n "$branch" ] || { err "использование: bin/harness worktree <репозиторий> <ветка> [--remove]" "usage: bin/harness worktree <repository> <branch> [--remove]"; exit 1; }
+  if [ -z "$name" ] || [ -z "$branch" ]; then err "использование: bin/harness worktree <репозиторий> <ветка> [--remove]" "usage: bin/harness worktree <repository> <branch> [--remove]"; exit 1; fi
   dir="$REPOS_DIR/$name"
   [ -e "$dir/.git" ] || { err "в repos/ нет клона «$name»" "there is no clone \"$name\" in repos/"; exit 1; }
   path="$WORKTREES_DIR/$name/$(printf '%s' "$branch" | tr -c 'A-Za-z0-9._-' '-')"

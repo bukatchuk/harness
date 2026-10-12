@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.6.1] — 2026-10-13
+
+### Fixed
+
+- The clone locks code now satisfies `shellcheck`: variables that shared their names with arrays in other functions are renamed, an unused variable is removed, conditions are written with `if`. The behaviour is unchanged; CI passes again.
+
 ## [1.6.0] — 2026-10-13
 
 ### Added
