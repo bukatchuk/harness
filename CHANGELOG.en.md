@@ -2,6 +2,19 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.5.0] — 2026-10-12
+
+### Added
+
+- Timeweb Cloud integration: the `integrations/timeweb.md` cheat sheet — calling the API, reading servers, S3 buckets and addresses. The token lives in the `TW_TOKEN` environment variable; `bin/harness doctor` checks that it is set and, with `--deep`, that the API answers.
+- A rule in `rules/secrets.md`: nothing is created or deleted in Timeweb Cloud without the owner's knowledge and explicit instruction for the specific resource.
+- README: a "Registry" section — what the three files hold, an S3 bucket recorded as a separate link, the hosting data block of a server and of a bucket.
+
+### Changed
+
+- Registry: a server now has `ipv4`, `ipv6` and a `timeweb` block (identifier, project, zone, plan, creation date, PTR); S3 buckets are recorded as `s3-<bucket>` links.
+- Registry of this installation: hosting data for every server and links for every bucket.
+
 ## [1.4.2] — 2026-10-12
 
 ### Changed

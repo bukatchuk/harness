@@ -31,7 +31,7 @@ harness keeps everything in one place. You start `claude` from its directory, an
 
 - **One set of rules for every project.** Git, secrets, servers, Docker, tasks, context economy — seven short files that apply everywhere.
 - **Commits in your name, with no trace of AI.** The author is pinned, and a hook blocks `Co-Authored-By`, "Generated with …" and attempts to swap the author — in the command, in a message file, in a PR or release description.
-- **A registry of projects and servers.** The agent knows what is deployed where and where it is configured from: `bin/harness map <server>` answers with one table.
+- **A registry of projects, servers and hosting resources.** The agent knows what is deployed where, where it is configured from and which bucket the backups go to: `bin/harness map <server>` answers with one table.
 - **Nothing destructive without your "yes".** Pushes, changes on servers, resource deletion, a registry reset — only after a confirmation that lists the specific actions.
 - **14 ready-made procedures.** Commit, push, pull request, adding and removing projects, servers and links, updating, diagnostics, reset, public release.
 - **Cleans up after itself.** Everything the agent starts in Docker is labelled and removed with one command; other containers are never touched.
@@ -101,11 +101,44 @@ flowchart LR
 | `.claude/` | their deployed copy in the chosen language; your own rules and skills go here too |
 | `.claude/settings.json` | hooks, permissions, disabled AI attribution |
 | `harness.json` | install settings: owner, language, integrations |
-| `registry/` | the registry: projects, servers and the links between them |
+| `registry/` | the registry: projects, servers and the links between them — see [Registry](#registry) |
 | `repos/` | project clones; each has its own git repository |
 | `.githooks/` | git hooks of harness itself: version control |
 
 `harness.json`, `registry/` and `repos/` are your data. They are not part of the harness repository and an update never touches them.
+
+## Registry
+
+The registry is three JSON files in `registry/`. The agent reads them before working with a project or a server and extends them through skills; you do not need to edit them by hand.
+
+| File | What it holds | Main fields |
+| --- | --- | --- |
+| `repos.json` | projects | `name`, `url`, `branch`, `description`, `stack`, the project in the task tracker |
+| `servers.json` | servers | `name`, `host`, `port`, `user`, `env`, `provider`, `location`, `os`, `ipv4`, `ipv6`, `description`, `notes` |
+| `services.json` | "repository → server → service" links | `name`, `scope`, `repo`, `path`, `servers`, `runtime`, `deploy`, `url`, `notes` |
+
+A link describes more than an application. Everything the application depends on that is configured outside the server is recorded the same way — for example, an S3 bucket for backups:
+
+```json
+{
+  "name": "s3-shop-backups",
+  "scope": "service",
+  "description": "The shop-backups bucket: daily database dumps",
+  "repo": "shop",
+  "path": "scripts/backup.sh",
+  "servers": ["shop-prod"],
+  "runtime": "S3 object storage: endpoint https://s3.example.com, region ru-1",
+  "deploy": "the bucket and its key are created by hand; settings live in secrets.env on the server",
+  "url": null,
+  "notes": "The local copy is deleted after the upload"
+}
+```
+
+The registry holds the bucket name, endpoint and region but no access keys: secrets are never written to the registry.
+
+If a hosting provider is connected (currently Timeweb Cloud), the agent reconciles the registry with its API and adds what cannot be learned from the server itself. A server gets a `timeweb` block: identifier, project, zone, plan, creation date, the address's reverse record (PTR). A bucket link gets the same kind of block with the bucket identifier, project, access type and storage class. This data shows which resources are missing from the registry and which exist at the provider but are used nowhere.
+
+`bin/harness servers` lists the servers; `bin/harness map <name>` shows everything linked to a server, a repository or a service, buckets included.
 
 ## Procedures (skills)
 
@@ -179,7 +212,8 @@ The rest — pushes, changes on servers, actions in external services, handling 
     "n8n": { "url": "https://n8n.example.com" },
     "gitguardian": {},
     "mailcow": { "url": "https://mail.example.com" },
-    "yandex_cloud": {}
+    "yandex_cloud": {},
+    "timeweb": {}
   }
 }
 ```
@@ -191,6 +225,7 @@ The rest — pushes, changes on servers, actions in external services, handling 
 | GitGuardian | secret scanning before every commit and in the release build | `GITGUARDIAN_TOKEN` |
 | Yandex Cloud | reading resources; changes after a confirmation | the `yc` profile |
 | mailcow | reading domains, mailboxes and aliases; changes after a confirmation | `MAILCOW_TOKEN` |
+| Timeweb Cloud | reading servers, S3 buckets and addresses; creating and deleting only on an explicit instruction | `TW_TOKEN` |
 
 Tokens live in environment variables only. harness checks that they are present but never reads or prints their values.
 
@@ -219,7 +254,7 @@ No. `harness.json`, `registry/` and `repos/` are excluded from git. To carry the
 **Can I add my own rules and procedures?**
 Yes: put a file into `.claude/rules/` or a directory into `.claude/skills/`. A language switch or an update does not touch them.
 
-**I do not use Plane, n8n or Yandex Cloud.**
+**I do not use Plane, n8n, Yandex Cloud or Timeweb Cloud.**
 Nothing to do: integrations stay off until they appear in `harness.json`.
 
 **How do I get the registry back after a reset?**
