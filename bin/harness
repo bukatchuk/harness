@@ -1575,7 +1575,7 @@ guard_repos() {
     for br in $args; do
       case "$br" in -*|*'>'*|*'<'*) continue ;; esac
       if printf '%s' "$br" | grep -q '[$`{]' || ! grep -qxF "$br" "$mine" 2>/dev/null; then
-        err "harness: ветку «$br» создала не эта сессия — удалять её нельзя. Удаляй только свои ветки и называй их поимённо (см. .claude/rules/git.md)." \
+        err "harness: ветку «${br}» создала не эта сессия — удалять её нельзя. Удаляй только свои ветки и называй их поимённо (см. .claude/rules/git.md)." \
             "harness: branch \"$br\" was not created by this session — it must not be deleted. Delete only your own branches and name each one (see .claude/rules/git.md)."
         exit 2
       fi
@@ -1648,7 +1648,7 @@ cmd_worktree() {
   local name="${1:-}" branch="${2:-}" remove="${3:-}" dir path def
   if [ -z "$name" ] || [ -z "$branch" ]; then err "использование: bin/harness worktree <репозиторий> <ветка> [--remove]" "usage: bin/harness worktree <repository> <branch> [--remove]"; exit 1; fi
   dir="$REPOS_DIR/$name"
-  [ -e "$dir/.git" ] || { err "в repos/ нет клона «$name»" "there is no clone \"$name\" in repos/"; exit 1; }
+  [ -e "$dir/.git" ] || { err "в repos/ нет клона «${name}»" "there is no clone \"$name\" in repos/"; exit 1; }
   path="$WORKTREES_DIR/$name/$(printf '%s' "$branch" | tr -c 'A-Za-z0-9._-' '-')"
   if [ "$remove" = "--remove" ]; then
     git -C "$dir" worktree remove "$path" || exit 1

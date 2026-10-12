@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.6.2] — 2026-10-13
+
+### Fixed
+
+- Refusing to delete a foreign branch ended in a shell error instead of a refusal in bash 3.2, the stock one on macOS (as in CI): in the message text a variable name stood right next to a guillemet, and the shell read it as part of the name. Variables in such places are now wrapped in braces.
+
 ## [1.6.1] — 2026-10-13
 
 ### Fixed
