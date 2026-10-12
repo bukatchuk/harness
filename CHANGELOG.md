@@ -2,6 +2,12 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [semver](https://semver.org/lang/ru/). English: [CHANGELOG.en.md](CHANGELOG.en.md).
 
+## [1.5.2] — 2026-10-12
+
+### Изменено
+
+- Пополнение реестра этой установки: уточнено примечание к одной из связей с бакетом.
+
 ## [1.5.1] — 2026-10-12
 
 ### Изменено
