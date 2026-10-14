@@ -1110,6 +1110,7 @@ selfcheck_locks() {
   lock_case 0 "$(t 'чтение чужого клона разрешено' 'reading a held clone is allowed')" B "$r" "git -C alpha log --oneline -1"
   lock_case 2 "$(t 'вторая сессия не уводит клон с чужой ветки' 'a second session cannot take the clone off a foreign branch')" B "$r" "git -C alpha switch main"
   lock_case 2 "$(t 'цикл по клонам тоже отклонён' 'a loop over clones is refused too')" B "$r" 'for x in alpha beta; do git -C $x switch -q main; done'
+  lock_case 2 "$(t 'цикл с путём repos/$x из корня тоже отклонён' 'a loop with a repos/$x path from the root is refused too')" B "$tmp" 'for x in alpha beta; do git -C repos/$x switch -q main; done'
   edit_case 2 "$(t 'правка файла в чужом клоне отклонена' 'editing a file in a held clone is refused')" B "$r/alpha/file.txt"
   lock_case 0 "$(t 'хозяин клона продолжает работу' 'the holder goes on working')" A "$r/alpha" "git commit -m x"
   lock_case 2 "$(t 'чужую ветку удалить нельзя' 'a foreign branch cannot be deleted')" A "$r" "git -C alpha branch -D other"
@@ -1513,7 +1514,8 @@ touched_repos() {
   {
     if [ "${cwd#"$REPOS_DIR"/}" != "$cwd" ]; then n="${cwd#"$REPOS_DIR"/}"; echo "${n%%/*}"; fi
     printf '%s' "$cmd" | grep -oE '(^|[^A-Za-z0-9._-])repos/[A-Za-z0-9._-]+' | sed -E 's|.*repos/||'
-    if [ "$cwd" = "$REPOS_DIR" ] || printf '%s' "$cmd" | grep -Eq "(^|[^A-Za-z0-9._-])repos/?([\"'[:space:];&|)]|\$)"; then
+    # repos/$x, repos/"$x", repos/${x}: the name comes from a variable, so look for bare names.
+    if [ "$cwd" = "$REPOS_DIR" ] || printf '%s' "$cmd" | grep -Eq "(^|[^A-Za-z0-9._-])repos/?([\"'[:space:];&|)\$]|\$)"; then
       for n in "$REPOS_DIR"/*/; do
         n="$(basename "$n")"
         printf '%s' "$cmd" | grep -Eq "(^|[[:space:]\"'=(/])$(printf '%s' "$n" | sed 's/[.]/\\./g')([[:space:]\"';)/]|\$)" && echo "$n"

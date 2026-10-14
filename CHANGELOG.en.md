@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.6.8] — 2026-10-14
+
+### Fixed
+
+- The protection of clones from neighbouring sessions missed a clone whose path was built from a variable: `for r in …; do git -C repos/$r …`. Such a command passed unchecked and did not take the clone. Now `repos/$…` counts as work with the clones named in the command; `bin/harness selfcheck` has a test for it.
+
 ## [1.6.7] — 2026-10-14
 
 ### Changed
