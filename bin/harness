@@ -1115,6 +1115,7 @@ selfcheck_locks() {
   lock_case 0 "$(t 'хозяин клона продолжает работу' 'the holder goes on working')" A "$r/alpha" "git commit -m x"
   lock_case 2 "$(t 'чужую ветку удалить нельзя' 'a foreign branch cannot be deleted')" A "$r" "git -C alpha branch -D other"
   lock_case 2 "$(t 'удаление веток списком отклонено' 'deleting branches by a list is refused')" A "$r" "git -C alpha branch | xargs git -C alpha branch -D"
+  lock_case 2 "$(t 'ветка с именем из переменной отклонена при создании' 'a branch named by a variable is refused on creation')" A "$r" 'git -C alpha switch -c "fix-$n"'
   lock_case 0 "$(t 'свою ветку удалить можно' 'the own branch can be deleted')" A "$r" "git -C alpha branch -D feat-a"
   git -C "$r/alpha" switch -q main
   lock_case 0 "$(t 'клон на основной ветке без правок свободен' 'a clean clone on its main branch is free')" B "$r" "git -C alpha switch -c feat-b"
@@ -1561,15 +1562,24 @@ lock_refuse() {
 
 # guard_repos <session> <command> <cwd> — the part of the Bash guard that protects shared clones.
 guard_repos() {
-  local sid="$1" cmd="$2" cwd="$3" name br args file lsid mine stay=""
+  local sid="$1" cmd="$2" cwd="$3" name br args file lsid mine created stay=""
   mine="$(lock_dir)/branches-$(printf '%s' "$sid" | tr -cd 'A-Za-z0-9_-')"
 
   # Branches this session creates are remembered: only they may be deleted later.
-  {
+  # The name is read from the command text, so a name the shell expands is refused up front:
+  # the hook would never learn it and would later refuse to delete the branch.
+  created="$({
     printf '%s' "$cmd" | grep -oE '(switch|checkout)[^|;&]*[[:space:]]-[cCbB][[:space:]]+[^[:space:];|&]+' | sed -E 's/.*[[:space:]]-[cCbB][[:space:]]+//'
     printf '%s' "$cmd" | grep -oE 'worktree[[:space:]]+add[^|;&]*[[:space:]]-[bB][[:space:]]+[^[:space:];|&]+' | sed -E 's/.*[[:space:]]-[bB][[:space:]]+//'
     printf '%s' "$cmd" | grep -oE 'harness"?[[:space:]]+worktree[[:space:]]+[^[:space:];|&]+[[:space:]]+[^[:space:];|&-][^[:space:];|&]*' | awk '{print $NF}'
-  } | tr -d "\"'" | grep -v '[$`{]' >> "$mine" 2>/dev/null
+  } | tr -d "\"'")"
+  br="$(printf '%s\n' "$created" | grep '[$`{]' | head -1)"
+  if [ -n "$br" ]; then
+    err "harness: имя новой ветки «${br}» подставляет оболочка — хук не узнает настоящее имя и потом не даст удалить ветку. Назови ветку буквально, например: git switch -c fix-login." \
+        "harness: the new branch name \"$br\" is expanded by the shell — the hook cannot learn the real name and will later refuse to delete the branch. Name the branch literally, e.g. git switch -c fix-login."
+    exit 2
+  fi
+  [ -z "$created" ] || printf '%s\n' "$created" >> "$mine" 2>/dev/null
 
   if printf '%s' "$cmd" | grep -Eq 'git[^|;&]*[[:space:]]branch[^|;&]*[[:space:]](-[dD]|--delete)([[:space:]]|$)'; then
     args="$(printf '%s' "$cmd" | grep -oE 'branch[^|;&]*[[:space:]](-[dD]|--delete)[^;|&]*' | sed -E 's/^branch[^|;&]*[[:space:]](-[dD]|--delete)//' | tr -d "\"'")"

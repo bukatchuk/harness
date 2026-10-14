@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.6.12] — 2026-10-14
+
+### Fixed
+
+- A branch created with a name from a variable (`git switch -c "fix-$n"`) was not remembered by the hook, which then refused to delete it: the hook reads the new branch name from the command text. Such a command is now refused right away with a request to name the branch literally. The case is covered by `bin/harness selfcheck`.
+
 ## [1.6.11] — 2026-10-14
 
 ### Changed
