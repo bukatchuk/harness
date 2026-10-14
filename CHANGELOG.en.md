@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.7.3] — 2026-10-14
+
+### Changed
+
+- Registry of this installation: the links of the sites name the deploy webhook token variable differently.
+
 ## [1.7.2] — 2026-10-14
 
 ### Fixed
