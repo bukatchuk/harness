@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.7.10] — 2026-10-15
+
+### Changed
+
+- Registry of this installation: the notes of four links reflect that the former backup scheduler was removed.
+
 ## [1.7.9] — 2026-10-15
 
 ### Changed
