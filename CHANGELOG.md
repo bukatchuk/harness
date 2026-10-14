@@ -2,6 +2,12 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [semver](https://semver.org/lang/ru/). English: [CHANGELOG.en.md](CHANGELOG.en.md).
 
+## [1.7.5] — 2026-10-14
+
+### Изменено
+
+- Пополнение реестра этой установки: новая связь репозитория с сервером.
+
 ## [1.7.4] — 2026-10-14
 
 ### Изменено
