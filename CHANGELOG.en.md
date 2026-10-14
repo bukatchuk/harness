@@ -2,6 +2,18 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.7.7] — 2026-10-15
+
+### Changed
+
+- Public build settings of this installation: a registry repository name that matches a common word is excluded from the leak check.
+
+## [1.7.6] — 2026-10-15
+
+### Changed
+
+- Registry of this installation: a new repository.
+
 ## [1.7.5] — 2026-10-14
 
 ### Changed
