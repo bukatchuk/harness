@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.6.6] — 2026-10-14
+
+### Changed
+
+- Registry of this installation: five more repositories changed their address, and their links get the deploy webhook from another source.
+
 ## [1.6.5] — 2026-10-14
 
 ### Changed
