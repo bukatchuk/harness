@@ -173,7 +173,7 @@ default_branch() {
 }
 
 # git fetch with a time limit: session start must not hang without a network.
-# A normal fetch from GitHub over SSH takes 4–5 seconds, so a limit under 10 gives a false "no updates".
+# A normal fetch from the remote over SSH takes 4–5 seconds, so a limit under 10 gives a false "no updates".
 # Returns non-zero when the fetch did not finish or failed.
 fetch_origin() {
   local secs="${1:-20}" pid
@@ -1126,6 +1126,7 @@ selfcheck_texts() {
   text_case 0 "$(t 'запрос в GitLab с чистым описанием проходит' 'a GitLab request with a clean text passes')" "bin/harness mr repos/x --title Fix --body-file $tmp/clean.md"
   text_case 2 "$(t 'AI-атрибуция в описании запроса в GitLab отклонена' 'AI attribution in a GitLab request text is refused')" "bin/harness mr repos/x --title Fix --body-file $tmp/ai.md"
   text_case 2 "$(t 'AI-атрибуция в описании релиза в GitLab отклонена' 'AI attribution in a GitLab release text is refused')" "bin/harness release-create repos/x v1.0.0 --title v1.0.0 --notes-file $tmp/ai.md"
+  text_case 0 "$(t 'команда внутри подстановки читает файл без скобки' 'a command inside a substitution reads the file without the parenthesis')" "url=\$(bin/harness mr repos/x --title Fix --body-file $tmp/clean.md)"
   text_case 2 "$(t 'файл описания, которого нет, отклонён' 'a missing text file is refused')" "bin/harness mr repos/x --title Fix --body-file $tmp/none.md"
   text_case 2 "$(t 'AI-атрибуция в описании PR в GitHub отклонена' 'AI attribution in a GitHub PR text is refused')" "gh pr create --title Fix --body-file $tmp/ai.md"
   unset -f text_case
@@ -1885,7 +1886,7 @@ hook_guard_bash() {
           "harness: file $f contains AI attribution (Co-Authored-By, \"Generated with\", 🤖). Remove it and retry."
       exit 2
     fi
-  done < <(printf '%s' "$cmd" | grep -oE '[[:space:]](-F|--file|--body-file|--notes-file)[= ]+[^[:space:];|&]+' | sed -E 's/^[[:space:]]*(-F|--file|--body-file|--notes-file)[= ]+//' | tr -d "\"'")
+  done < <(printf '%s' "$cmd" | grep -oE '[[:space:]](-F|--file|--body-file|--notes-file)[= ]+[^[:space:];|&)]+' | sed -E 's/^[[:space:]]*(-F|--file|--body-file|--notes-file)[= ]+//' | tr -d "\"'")
   exit 0
 }
 

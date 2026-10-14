@@ -2,6 +2,18 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.7.2] — 2026-10-14
+
+### Fixed
+
+- The `guard-bash` hook took the closing parenthesis as part of the text file path when the command stood inside a `$(…)` substitution (for example, the request URL from `bin/harness mr`) and refused it. The test is in `bin/harness selfcheck`.
+
+## [1.7.1] — 2026-10-14
+
+### Fixed
+
+- The comment on the update check in `bin/harness` no longer assumes the harness `origin` is always on GitHub.
+
 ## [1.7.0] — 2026-10-14
 
 ### Added
