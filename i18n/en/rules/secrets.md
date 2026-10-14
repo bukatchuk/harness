@@ -1,6 +1,6 @@
 # Secrets and access
 
-- Tokens live only in environment variables: `PLANE_TOKEN`, `N8N_TOKEN`, `GITGUARDIAN_TOKEN`, `MAILCOW_TOKEN`, `TW_TOKEN` — for the integrations enabled in `harness.json`. Access to Yandex Cloud is through the `yc` profile, with no token in the environment. How to use them is in `.claude/integrations/`.
+- Tokens live only in environment variables: `PLANE_TOKEN`, `N8N_TOKEN`, `GITGUARDIAN_TOKEN`, `MAILCOW_TOKEN`, `TW_TOKEN`, `GITLAB_TOKEN` — for the integrations enabled in `harness.json`. Access to Yandex Cloud is through the `yc` profile, with no token in the environment. How to use them is in `.claude/integrations/`.
 - Never print token values: no `echo $TOKEN`, `env`, `printenv`, `set -x` near them. Check only presence (`[ -n "$PLANE_TOKEN" ]`).
 - Do not write secrets into files, commits, messages, logs and request bodies to third-party services. A token is sent only to its own service.
 - If you find a secret in code or history, stop and tell the owner; do not commit and do not "fix" it silently.

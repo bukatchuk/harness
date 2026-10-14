@@ -213,6 +213,7 @@ bin/harness <команда>
     "plane": { "url": "https://plane.example.com", "workspace": "team", "default_project": "MAIN", "default_project_id": "<id>" },
     "n8n": { "url": "https://n8n.example.com" },
     "gitguardian": {},
+    "gitlab": { "url": "https://git.example.com" },
     "mailcow": { "url": "https://mail.example.com" },
     "yandex_cloud": {},
     "timeweb": {}
@@ -225,6 +226,7 @@ bin/harness <команда>
 | Plane | задачи: агент сам ведёт статусы и пишет итоговые комментарии | `PLANE_TOKEN` |
 | n8n | чтение workflow и запусков; изменения — после подтверждения | `N8N_TOKEN` |
 | GitGuardian | поиск секретов перед каждым коммитом и в сборке релиза | `GITGUARDIAN_TOKEN` |
+| GitLab | свой GitLab: запросы на слияние и релизы командами `bin/harness`, конвейеры и задания через API; skills `push` и `pr-create` сами выбирают GitHub или GitLab по `origin` | `GITLAB_TOKEN` |
 | Yandex Cloud | чтение ресурсов; изменения — после подтверждения | профиль `yc` |
 | mailcow | чтение доменов, ящиков и алиасов; изменения — после подтверждения | `MAILCOW_TOKEN` |
 | Timeweb Cloud | чтение серверов, бакетов S3 и адресов; создание и удаление — только по явному распоряжению | `TW_TOKEN` |

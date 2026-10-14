@@ -9,7 +9,7 @@ Remove a repository from the registry. Arguments: $ARGUMENTS
 1. Find the project in the registry and look at the state of the clone: `bin/harness status`. Note whether there are modified files and unpushed commits.
 2. Show which links refer to it: `bin/harness map <repo>`.
 3. Explain the consequences:
-   - the entry is removed from the registry; the remote repository on GitHub is not affected;
+   - the entry is removed from the registry; the remote repository (GitHub, GitLab) is not affected;
    - links in which this repository is the configuration source are removed entirely with the `--unlink` flag — name them by name;
    - the clone in `repos/<name>` stays on disk by default. Deleting it is a separate decision of the owner.
 4. **Ask for consent and wait for the answer.** Ask about the clone separately. If the clone has modified files or unpushed commits, say so directly and give the numbers: deleting the clone will destroy that work with no way to recover it.

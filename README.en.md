@@ -213,6 +213,7 @@ The rest — pushes, changes on servers, actions in external services, handling 
     "plane": { "url": "https://plane.example.com", "workspace": "team", "default_project": "MAIN", "default_project_id": "<id>" },
     "n8n": { "url": "https://n8n.example.com" },
     "gitguardian": {},
+    "gitlab": { "url": "https://git.example.com" },
     "mailcow": { "url": "https://mail.example.com" },
     "yandex_cloud": {},
     "timeweb": {}
@@ -225,6 +226,7 @@ The rest — pushes, changes on servers, actions in external services, handling 
 | Plane | tasks: the agent keeps statuses current and writes closing comments | `PLANE_TOKEN` |
 | n8n | reading workflows and executions; changes after a confirmation | `N8N_TOKEN` |
 | GitGuardian | secret scanning before every commit and in the release build | `GITGUARDIAN_TOKEN` |
+| GitLab | your own GitLab: merge requests and releases with `bin/harness` commands, pipelines and jobs through the API; the `push` and `pr-create` skills pick GitHub or GitLab by `origin` | `GITLAB_TOKEN` |
 | Yandex Cloud | reading resources; changes after a confirmation | the `yc` profile |
 | mailcow | reading domains, mailboxes and aliases; changes after a confirmation | `MAILCOW_TOKEN` |
 | Timeweb Cloud | reading servers, S3 buckets and addresses; creating and deleting only on an explicit instruction | `TW_TOKEN` |

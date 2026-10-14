@@ -6,7 +6,7 @@ argument-hint: "<git-url> [name]"
 
 Add a repository to the registry. Arguments: $ARGUMENTS
 
-1. Take the URL in SSH form (`git@github.com:<owner>/<name>.git`). The default name is the repository name; it must be unique in the registry.
+1. Take the URL in SSH form: `git@github.com:<owner>/<name>.git` or, for the owner's GitLab, `git@<GitLab host>:<group>/<name>.git`. The default name is the repository name; it must be unique in the registry.
 2. Check access without cloning: `git ls-remote --symref <url> HEAD`. Take the main branch from the same output.
 3. Add an entry to `registry/repos.json` with `jq`, keeping the sort by name. Fields:
    - `name` — the directory name in `repos/`;

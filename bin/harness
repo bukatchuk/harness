@@ -98,6 +98,14 @@ Git и Docker
   worktree <имя> <ветка> [--remove]
                            отдельная рабочая копия клона для параллельной сессии
 
+GitLab (интеграция gitlab)
+  forge [путь]             где живёт origin репозитория: gitlab, github или other
+  mr <путь> --title <заголовок> --body-file <файл> [--base <ветка>]
+                           запрос на слияние из текущей ветки
+  mr-status <путь> <номер> конвейер и готовность запроса к слиянию
+  release-create <путь> <тег> --title <заголовок> --notes-file <файл>
+                           релиз на существующий тег
+
 Публичный релиз
   release-build [--preview]   собрать открытую версию без данных владельца и проверить на утечки
   release-publish [--push]    показать или отправить релиз в публичный репозиторий
@@ -137,6 +145,15 @@ Parallel sessions
   unlock <name>            remove the lock of a clone (only when the owner says so)
   worktree <name> <branch> [--remove]
                            a separate working copy of a clone for a parallel session
+
+GitLab (the gitlab integration)
+  forge [path]             where the repository's origin lives: gitlab, github or other
+  mr <path> --title <title> --body-file <file> [--base <branch>]
+                           a merge request from the current branch
+  mr-status <path> <number>
+                           the pipeline and whether the request can be merged
+  release-create <path> <tag> --title <title> --notes-file <file>
+                           a release for an existing tag
 
 Public release
   release-build [--preview]   build the open version without owner data and scan it for leaks
@@ -559,6 +576,10 @@ cmd_doctor() {
     if [ -n "${MAILCOW_TOKEN:-}" ]; then ok "MAILCOW_TOKEN"; else warn "MAILCOW_TOKEN $(t 'не задан в окружении' 'is not set in the environment')"; fi
     [ -n "$(conf '.integrations.mailcow.url')" ] || fail "$(t 'в harness.json нет integrations.mailcow.url' 'harness.json has no integrations.mailcow.url')"
   fi
+  if integration_on gitlab; then any=1
+    if [ -n "${GITLAB_TOKEN:-}" ]; then ok "GITLAB_TOKEN"; else warn "GITLAB_TOKEN $(t 'не задан в окружении' 'is not set in the environment')"; fi
+    [ -n "$(conf '.integrations.gitlab.url')" ] || fail "$(t 'в harness.json нет integrations.gitlab.url' 'harness.json has no integrations.gitlab.url')"
+  fi
   if integration_on timeweb; then any=1
     if [ -n "${TW_TOKEN:-}" ]; then ok "TW_TOKEN"; else warn "TW_TOKEN $(t 'не задан в окружении' 'is not set in the environment')"; fi
   fi
@@ -567,7 +588,7 @@ cmd_doctor() {
   fi
   [ "$any" -eq 1 ] || ok "$(t 'не подключены (ключ integrations в harness.json)' 'none enabled (the integrations key in harness.json)')"
 
-  section "Git / GitHub"
+  section "Git"
   if [ "$(git -C "$ROOT" config --local core.hooksPath 2>/dev/null)" = ".githooks" ]; then
     ok "$(t 'git-хуки harness включены (контроль версии)' 'harness git hooks are enabled (version control)')"
   else
@@ -636,6 +657,8 @@ cmd_doctor() {
     [ -n "$url" ] && [ -n "${PLANE_TOKEN:-}" ] && http_check "Plane" "${url%/}/api/v1/users/me/" "X-API-Key: $PLANE_TOKEN"
     url="$(conf '.integrations.n8n.url')"
     [ -n "$url" ] && [ -n "${N8N_TOKEN:-}" ] && http_check "n8n" "${url%/}/api/v1/workflows?limit=1" "X-N8N-API-KEY: $N8N_TOKEN"
+    url="$(conf '.integrations.gitlab.url')"
+    [ -n "$url" ] && [ -n "${GITLAB_TOKEN:-}" ] && http_check "GitLab" "${url%/}/api/v4/user" "PRIVATE-TOKEN: $GITLAB_TOKEN"
     url="$(conf '.integrations.mailcow.url')"
     [ -n "$url" ] && [ -n "${MAILCOW_TOKEN:-}" ] && http_check "mailcow" "${url%/}/api/v1/get/status/version" "X-API-Key: $MAILCOW_TOKEN"
     integration_on timeweb && [ -n "${TW_TOKEN:-}" ] && http_check "Timeweb Cloud" "https://api.timeweb.cloud/api/v1/account/status" "Authorization: Bearer $TW_TOKEN"
@@ -1079,8 +1102,34 @@ cmd_selfcheck() {
   section "$(t 'Блокировки клонов' 'Clone locks')"
   selfcheck_locks
 
+  section "$(t 'Тексты запросов и релизов' 'Texts of requests and releases')"
+  selfcheck_texts
+
   say "Итог: ошибок $ERRORS" "Result: errors $ERRORS"
   [ "$ERRORS" -eq 0 ]
+}
+
+# The Bash guard reads the text files of gh and of the GitLab commands of harness and refuses AI attribution.
+selfcheck_texts() {
+  local tmp rc
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/harness-texts.XXXXXX")" || { fail "mktemp"; return; }
+  printf 'Fixes the deploy.\n' > "$tmp/clean.md"
+  # The marker is assembled here so that this file itself does not carry it.
+  printf 'Fixes the deploy.\n\n%s %s Claude Code\n' Generated with > "$tmp/ai.md"
+  # text_case <expected code> <label> <command>
+  text_case() {
+    jq -n --arg d "$tmp" --arg c "$3" '{session_id: "T", cwd: $d, tool_input: {command: $c}}' \
+      | HARNESS_STATE_DIR="$tmp/state" "$ROOT/bin/harness" hook guard-bash >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" -eq "$1" ]; then ok "$2"; else fail "$2 ($(t "код $rc вместо $1" "code $rc instead of $1"))"; fi
+  }
+  text_case 0 "$(t 'запрос в GitLab с чистым описанием проходит' 'a GitLab request with a clean text passes')" "bin/harness mr repos/x --title Fix --body-file $tmp/clean.md"
+  text_case 2 "$(t 'AI-атрибуция в описании запроса в GitLab отклонена' 'AI attribution in a GitLab request text is refused')" "bin/harness mr repos/x --title Fix --body-file $tmp/ai.md"
+  text_case 2 "$(t 'AI-атрибуция в описании релиза в GitLab отклонена' 'AI attribution in a GitLab release text is refused')" "bin/harness release-create repos/x v1.0.0 --title v1.0.0 --notes-file $tmp/ai.md"
+  text_case 2 "$(t 'файл описания, которого нет, отклонён' 'a missing text file is refused')" "bin/harness mr repos/x --title Fix --body-file $tmp/none.md"
+  text_case 2 "$(t 'AI-атрибуция в описании PR в GitHub отклонена' 'AI attribution in a GitHub PR text is refused')" "gh pr create --title Fix --body-file $tmp/ai.md"
+  unset -f text_case
+  rm -rf "$tmp"
 }
 
 # Two sessions on throwaway clones: the second one is refused, a foreign branch survives.
@@ -1364,6 +1413,122 @@ cmd_release_publish() {
   fi
   rm -f "$notes"
   say "Опубликовано: $slug v$v" "Published: $slug v$v"
+}
+
+# --- GitLab -------------------------------------------------------------------
+
+# forge_of <path> — where the clone's origin lives: gitlab (the host of integrations.gitlab.url), github or other.
+forge_of() {
+  local host gl
+  host="$(git -C "$1" remote get-url origin 2>/dev/null | sed -E 's#^[a-z+]+://##; s#^[^@/]*@##; s#[:/].*##')"
+  gl="$(conf '.integrations.gitlab.url' | sed -E 's#^[a-z]+://##; s#[:/].*##')"
+  if [ -n "$gl" ] && [ "$host" = "$gl" ]; then echo gitlab
+  elif [ "$host" = github.com ]; then echo github
+  else echo other; fi
+}
+
+# gl_project <path> — namespace/project of the clone's origin, encoded for the API.
+gl_project() {
+  git -C "$1" remote get-url origin 2>/dev/null \
+    | sed -E 's#^[a-z+]+://[^/]+/##; s#^[^@/]*@[^:]+:##; s#\.git$##' | jq -sRr 'rtrimstr("\n") | @uri'
+}
+
+# gl_api <api path> [curl args] — the token goes in a header and only to the GitLab of this installation.
+gl_api() {
+  local url; url="$(conf '.integrations.gitlab.url')"
+  curl -sS --max-time 60 -H @<(printf 'PRIVATE-TOKEN: %s' "$GITLAB_TOKEN") -H 'Content-Type: application/json' \
+    "${url%/}/api/v4$1" "${@:2}"
+}
+
+gl_ready() {
+  integration_on gitlab || { err "интеграция gitlab не подключена: integrations.gitlab.url в harness.json" "the gitlab integration is not enabled: integrations.gitlab.url in harness.json"; return 1; }
+  [ -n "${GITLAB_TOKEN:-}" ] || { err "GITLAB_TOKEN не задан в окружении" "GITLAB_TOKEN is not set in the environment"; return 1; }
+  [ "$(forge_of "$1")" = gitlab ] || { err "origin репозитория $1 — не GitLab этой установки" "the origin of $1 is not the GitLab of this installation"; return 1; }
+}
+
+# no_ai_text <text> <file> — the title and the file carry no AI attribution; the file must exist.
+no_ai_text() {
+  [ -f "$2" ] || { err "нет файла $2" "no file $2"; return 1; }
+  if printf '%s' "$1" | grep -Eiq "$AI_MARKERS" || grep -Eiq "$AI_MARKERS" "$2"; then
+    err "в заголовке или в $2 есть AI-атрибуция (см. .claude/rules/git.md)" "the title or $2 contains AI attribution (see .claude/rules/git.md)"; return 1
+  fi
+}
+
+gl_fail() {
+  err "GitLab: $(printf '%s' "$1" | jq -rc '.message // .error // .' 2>/dev/null | cut -c1-300)" "GitLab: $(printf '%s' "$1" | jq -rc '.message // .error // .' 2>/dev/null | cut -c1-300)"
+  return 1
+}
+
+cmd_forge() { forge_of "${1:-.}"; }
+
+# mr <path> --title <title> --body-file <file> [--base <branch>] — a merge request from the current branch.
+cmd_mr() {
+  local path="${1:-}" title="" body="" base="" branch res
+  [ $# -gt 0 ] && shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --title) title="${2:-}"; shift 2 ;;
+      --body-file) body="${2:-}"; shift 2 ;;
+      --base) base="${2:-}"; shift 2 ;;
+      *) err "неизвестный ключ: $1" "unknown option: $1"; return 1 ;;
+    esac
+  done
+  if [ -z "$path" ] || [ -z "$title" ] || [ -z "$body" ]; then
+    err "использование: bin/harness mr <путь> --title <заголовок> --body-file <файл> [--base <ветка>]" \
+        "usage: bin/harness mr <path> --title <title> --body-file <file> [--base <branch>]"
+    return 1
+  fi
+  gl_ready "$path" && no_ai_text "$title" "$body" || return 1
+  branch="$(git -C "$path" branch --show-current)"
+  [ -n "$base" ] || base="$(git -C "$path" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')"
+  base="${base:-main}"
+  if [ -z "$branch" ] || [ "$branch" = "$base" ]; then
+    err "текущая ветка — основная или не выбрана: создай рабочую ветку" "the current branch is the base one or none: create a working branch"; return 1
+  fi
+  res="$(jq -n --arg s "$branch" --arg t "$base" --arg ti "$title" --rawfile d "$body" \
+    '{source_branch: $s, target_branch: $t, title: $ti, description: $d, remove_source_branch: true}' \
+    | gl_api "/projects/$(gl_project "$path")/merge_requests" -X POST -d @-)"
+  printf '%s' "$res" | jq -e '.web_url' >/dev/null 2>&1 || { gl_fail "$res"; return 1; }
+  printf '%s' "$res" | jq -r '.web_url'
+}
+
+# mr-status <path> <number> — the pipeline of the request and whether it can be merged.
+cmd_mr_status() {
+  local path="${1:-}" iid="${2:-}" res
+  [ -n "$path" ] && [ -n "$iid" ] || { err "использование: bin/harness mr-status <путь> <номер>" "usage: bin/harness mr-status <path> <number>"; return 1; }
+  gl_ready "$path" || return 1
+  res="$(gl_api "/projects/$(gl_project "$path")/merge_requests/$iid")"
+  printf '%s' "$res" | jq -e '.iid' >/dev/null 2>&1 || { gl_fail "$res"; return 1; }
+  printf '%s' "$res" | jq -r --arg l "$HLANG" 'if $l != "ru" then
+      "!\(.iid) \(.state): pipeline \(.head_pipeline.status // "none"), merge \(.detailed_merge_status)"
+    else
+      "!\(.iid) \(.state): конвейер \(.head_pipeline.status // "нет"), слияние \(.detailed_merge_status)" end'
+}
+
+# release-create <path> <tag> --title <title> --notes-file <file> — a release for a tag already pushed.
+cmd_release_create() {
+  local path="${1:-}" tag="${2:-}" title="" notes="" res enc
+  [ $# -gt 1 ] && shift 2
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --title) title="${2:-}"; shift 2 ;;
+      --notes-file) notes="${2:-}"; shift 2 ;;
+      *) err "неизвестный ключ: $1" "unknown option: $1"; return 1 ;;
+    esac
+  done
+  if [ -z "$path" ] || [ -z "$tag" ] || [ -z "$title" ] || [ -z "$notes" ]; then
+    err "использование: bin/harness release-create <путь> <тег> --title <заголовок> --notes-file <файл>" \
+        "usage: bin/harness release-create <path> <tag> --title <title> --notes-file <file>"
+    return 1
+  fi
+  gl_ready "$path" && no_ai_text "$title" "$notes" || return 1
+  enc="$(printf '%s' "$tag" | jq -sRr @uri)"
+  gl_api "/projects/$(gl_project "$path")/repository/tags/$enc" | jq -e '.name' >/dev/null 2>&1 \
+    || { err "тега $tag нет в GitLab: сначала отправь его" "tag $tag is not in GitLab: push it first"; return 1; }
+  res="$(jq -n --arg t "$tag" --arg n "$title" --rawfile d "$notes" '{tag_name: $t, name: $n, description: $d}' \
+    | gl_api "/projects/$(gl_project "$path")/releases" -X POST -d @-)"
+  printf '%s' "$res" | jq -e '.tag_name' >/dev/null 2>&1 || { gl_fail "$res"; return 1; }
+  printf '%s' "$res" | jq -r '._links.self'
 }
 
 # --- Claude Code hooks --------------------------------------------------------
@@ -1697,7 +1862,7 @@ hook_guard_bash() {
     exit 2
   fi
 
-  printf '%s' "$cmd" | grep -Eq '(git[^|;&]*[[:space:]](commit|merge|tag|revert|cherry-pick|rebase)|gh[^|;&]*[[:space:]](pr|issue|release))([[:space:]]|$)' || exit 0
+  printf '%s' "$cmd" | grep -Eq '(git[^|;&]*[[:space:]](commit|merge|tag|revert|cherry-pick|rebase)|gh[^|;&]*[[:space:]](pr|issue|release)|harness[^|;&]*[[:space:]](mr|release-create))([[:space:]]|$)' || exit 0
 
   if printf '%s' "$cmd" | grep -Eiq "$AI_MARKERS"; then
     err "harness: в сообщении коммита, тега или PR есть AI-атрибуция (Co-Authored-By, «Generated with», 🤖). Убери её и повтори (см. .claude/rules/git.md)." \
@@ -1748,6 +1913,10 @@ case "${1:-}" in
   locks)           cmd_locks ;;
   unlock)          shift; cmd_unlock "$@" ;;
   worktree)        shift; cmd_worktree "$@" ;;
+  forge)           shift; cmd_forge "$@" ;;
+  mr)              shift; cmd_mr "$@" ;;
+  mr-status)       shift; cmd_mr_status "$@" ;;
+  release-create)  shift; cmd_release_create "$@" ;;
   release-build)   shift; cmd_release_build "$@" ;;
   release-publish) shift; cmd_release_publish "$@" ;;
   hook)

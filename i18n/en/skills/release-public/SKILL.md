@@ -13,7 +13,7 @@ Publishing is irreversible: whatever reaches the public repository may have been
 3. If the check found a leak, stop. Show the owner the file and line, fix the source in the core (not in `dist/`), release a new version and build again. Adding a word to `release.allow_terms` in `harness.json` is allowed only by the owner's decision.
 4. Show the owner what will go out: the number of files, `git diff --stat` against the public repository (printed by `bin/harness release-publish` without `--push`), the changelog entries of this version.
 5. **Ask for consent to push and wait for the answer.** If auto-publishing is on (`release.auto_publish: true`), the consent is already given — do not ask, but stop and ask if `git diff --stat` shows files you did not expect in this version.
-6. Push: `bin/harness release-publish --push`. The command adds one commit per release to the public repository, creates the tag `v<version>` and creates a GitHub release with the archive. It does not carry over the history of the private repository and does not rewrite anyone else's history.
+6. Push: `bin/harness release-publish --push`. The command adds one commit per release to the public repository, creates the tag `v<version>` and creates a GitHub release with the archive. The public repository stays on GitHub even when the private one lives in GitLab. It does not carry over the history of the private repository and does not rewrite anyone else's history.
 7. Return the release link to the owner.
 
 The address of the public repository is in `harness.json`: `release.public_repo`. If the key is absent, the command refuses to work.

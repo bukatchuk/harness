@@ -2,6 +2,22 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.7.0] — 2026-10-14
+
+### Added
+
+- The GitLab integration: the cheat sheet `.claude/integrations/gitlab.md`, the `GITLAB_TOKEN` token in the environment, the address in `integrations.gitlab.url` of `harness.json`.
+- Commands `bin/harness forge` (where `origin` lives: gitlab, github or other), `mr` (a merge request from the current branch), `mr-status` (the pipeline and whether the request can be merged), `release-create` (a GitLab release for a pushed tag). Texts go only as a file; the commands refuse AI attribution themselves.
+- `bin/harness selfcheck`: the "Texts of requests and releases" section — the hook refuses AI attribution in GitLab request and release texts and in GitHub PR texts.
+
+### Changed
+
+- The `guard-bash` hook checks the texts of `bin/harness mr` and `release-create` the same way as the texts of `gh pr`, `gh issue`, `gh release`.
+- The `push` and `pr-create` skills pick GitHub or GitLab by `bin/harness forge`; descriptions are passed as a file.
+- The `harness.md` rule: a release is created where the harness repository lives; file links in GitLab are `/-/blob/v<version>/<path>`.
+- `bin/harness doctor`: the presence of `GITLAB_TOKEN` and, with `--deep`, a real request to GitLab; the "Git / GitHub" section became "Git".
+- `repo-add`, `repo-remove`, `harness-doctor`, `release-public`, README: GitLab on a par with GitHub; the public harness stays on GitHub.
+
 ## [1.6.14] — 2026-10-14
 
 ### Changed

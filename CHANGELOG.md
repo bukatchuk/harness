@@ -2,6 +2,22 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [semver](https://semver.org/lang/ru/). English: [CHANGELOG.en.md](CHANGELOG.en.md).
 
+## [1.7.0] — 2026-10-14
+
+### Добавлено
+
+- Интеграция GitLab: шпаргалка `.claude/integrations/gitlab.md`, токен `GITLAB_TOKEN` в окружении, адрес — `integrations.gitlab.url` в `harness.json`.
+- Команды `bin/harness forge` (где живёт `origin`: gitlab, github или other), `mr` (запрос на слияние из текущей ветки), `mr-status` (конвейер и готовность к слиянию), `release-create` (релиз в GitLab на отправленный тег). Тексты — только файлом; команды сами отказываются от AI-атрибуции.
+- `bin/harness selfcheck`: раздел «Тексты запросов и релизов» — хук отклоняет AI-атрибуцию в описаниях запросов и релизов GitLab и PR в GitHub.
+
+### Изменено
+
+- Хук `guard-bash` проверяет тексты команд `bin/harness mr` и `release-create` так же, как тексты `gh pr`, `gh issue`, `gh release`.
+- Skills `push` и `pr-create` выбирают GitHub или GitLab по `bin/harness forge`; описания передаются файлом.
+- Правило `harness.md`: релиз создаётся там, где живёт репозиторий harness; ссылки на файлы в GitLab — `/-/blob/v<версия>/<путь>`.
+- `bin/harness doctor`: наличие `GITLAB_TOKEN` и с `--deep` — реальный запрос к GitLab; раздел «Git / GitHub» стал «Git».
+- `repo-add`, `repo-remove`, `harness-doctor`, `release-public`, README: GitLab наравне с GitHub; публичный harness остаётся на GitHub.
+
 ## [1.6.14] — 2026-10-14
 
 ### Изменено

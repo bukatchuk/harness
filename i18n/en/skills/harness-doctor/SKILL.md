@@ -1,6 +1,6 @@
 ---
 name: harness-doctor
-description: Full check of the harness environment — utilities, tokens, real access to Plane, n8n, GitGuardian, Yandex Cloud, GitHub and Docker. Use on a new device, on access errors, or when the owner asks to check the environment.
+description: Full check of the harness environment — utilities, tokens, real access to Plane, n8n, GitGuardian, GitLab, Yandex Cloud, GitHub and Docker. Use on a new device, on access errors, or when the owner asks to check the environment.
 ---
 
 Check the environment.
