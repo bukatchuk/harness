@@ -90,7 +90,7 @@ Git и Docker
   check-commits [путь]     проверить неотправленные коммиты: автор и AI-атрибуция
   docker-up                запустить демон Docker и дождаться готовности
   docker-check             показать ресурсы Docker, оставшиеся от harness
-  docker-clean             удалить ресурсы Docker, созданные harness
+  docker-clean [--all]     удалить ресурсы Docker этой сессии и остановленные без метки сессии; --all — все ресурсы harness
 
 Параллельные сессии
   locks                    клоны в repos/, занятые сессиями
@@ -144,7 +144,7 @@ Git and Docker
   check-commits [path]     check unpushed commits: author and AI attribution
   docker-up                start the Docker daemon and wait until it is ready
   docker-check             show Docker resources left behind by harness
-  docker-clean             remove Docker resources created by harness
+  docker-clean [--all]     remove this session's Docker resources and stopped ones without a session label; --all — every harness resource
 
 Parallel sessions
   locks                    clones in repos/ held by sessions
@@ -540,19 +540,38 @@ docker_hung_msg() {
       "Docker does not respond: a docker command did not finish within ${HARNESS_DOCKER_TIMEOUT:-10} s — restart Docker Desktop"
 }
 
-harness_containers() {
-  dk ps -aq --filter label=harness=1
-  dk ps -a --format '{{.ID}} {{.Label "com.docker.compose.project"}}' | awk '$2 ~ /^harness-/ {print $1}'
+# harness_session — this Claude Code session: 8 characters, as in `locks`. The session start hook exports
+# HARNESS_SESSION; empty outside a session.
+harness_session() {
+  printf '%s' "${HARNESS_SESSION:-${CLAUDE_CODE_SESSION_ID:-}}" | tr -cd 'A-Za-z0-9_-' | cut -c1-8
 }
-harness_networks() {
-  dk network ls -q --filter label=harness=1
-  dk network ls --format '{{.ID}} {{.Label "com.docker.compose.project"}}' | awk '$2 ~ /^harness-/ {print $1}'
+
+# harness_resources — "<kind> <id> <session or -> <state or ->" for every harness resource: the label harness=1
+# or a compose project harness-*. The session is the harness.session label or the suffix of a compose project
+# named harness-<project>-<session>.
+harness_resources() {
+  local f='{{.Label "harness"}}\t{{.Label "harness.session"}}\t{{.Label "com.docker.compose.project"}}' ids
+  {
+    dk ps -a --format "{{.ID}}\t$f\t{{.State}}" | sed 's/^/containers\t/'
+    dk network ls --format "{{.ID}}\t$f\t-" | sed 's/^/networks\t/'
+    dk volume ls --format "{{.Name}}\t$f\t-" | sed 's/^/volumes\t/'
+  } | awk -F'\t' '
+    $3 == "1" || $5 ~ /^harness-/ {
+      s = substr($4, 1, 8)
+      if (s == "" && match($5, /-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]$/)) s = substr($5, RSTART + 1)
+      print $1, $2, (s == "" ? "-" : s), ($6 == "" ? "-" : $6)
+    }'
+  ids="$(dk images -q --filter label=harness=1 | sort -u)"
+  # shellcheck disable=SC2086  # ids are separate words on purpose
+  [ -z "$ids" ] || dk image inspect --format '{{.Id}} {{index .Config.Labels "harness.session"}}' $ids \
+    | awk '{ s = substr($2, 1, 8); if (s == "" || s == "<no") s = "-"; print "images", $1, s, "-" }'
 }
-harness_volumes() {
-  dk volume ls -q --filter label=harness=1
-  dk volume ls --format '{{.Name}} {{.Label "com.docker.compose.project"}}' | awk '$2 ~ /^harness-/ {print $1}'
+
+# harness_classified — harness_resources with the owner instead of the session: own (this session),
+# other (another session), none (no session label: an older harness or created by hand).
+harness_classified() {
+  harness_resources | awk -v me="$(harness_session)" '{ print $1, $2, ($3 == "-" ? "none" : ($3 == me ? "own" : "other")), $4 }'
 }
-harness_images() { dk images -q --filter label=harness=1; }
 
 cmd_doctor() {
   local deep=0 arg tool v
@@ -649,9 +668,9 @@ cmd_doctor() {
     if [ "$dstate" -eq 0 ]; then
       ok "$(t 'демон запущен' 'the daemon is running')"
       local left
-      left="$( { harness_containers; harness_networks; harness_volumes; } | sort -u | grep -c . )"
+      left="$(harness_classified | awk '$3 != "own" && $1 != "images"' | grep -c .)"
       if [ "$left" -gt 0 ]; then
-        warn "$(t "от прошлых запусков остались ресурсы harness ($left): bin/harness docker-clean" "harness resources are left from earlier runs ($left): bin/harness docker-clean")"
+        warn "$(t "ресурсы harness других сессий и без метки сессии ($left): bin/harness docker-check" "harness resources of other sessions and without a session label ($left): bin/harness docker-check")"
       fi
     elif [ "$dstate" -eq 2 ]; then
       warn "$(t "Docker не отвечает: команда docker не завершилась за ${HARNESS_DOCKER_TIMEOUT:-10} с — перезапусти Docker Desktop" "Docker does not respond: a docker command did not finish within ${HARNESS_DOCKER_TIMEOUT:-10} s — restart Docker Desktop")"
@@ -1084,28 +1103,67 @@ cmd_docker_check() {
   docker_state || st=$?
   [ "$st" -eq 2 ] && { docker_hung_msg; return 1; }
   [ "$st" -eq 0 ] || { say "демон Docker остановлен — ресурсов нет" "the Docker daemon is stopped — no resources"; return 0; }
-  local c n v i
-  c="$(harness_containers | sort -u | grep -c .)"
-  n="$(harness_networks | sort -u | grep -c .)"
-  v="$(harness_volumes | sort -u | grep -c .)"
-  i="$(harness_images | sort -u | grep -c .)"
-  say "ресурсы harness: контейнеров $c, сетей $n, томов $v, образов $i" "harness resources: containers $c, networks $n, volumes $v, images $i"
+  local list me c n v i other none
+  list="$(harness_classified)"; me="$(harness_session)"
+  count() { printf '%s\n' "$list" | awk -v k="$1" -v o="$2" '($1 == k || k == "*") && $3 == o' | grep -c .; }
+  c="$(count containers own)"; n="$(count networks own)"; v="$(count volumes own)"; i="$(count images own)"
+  other="$(count '*' other)"; none="$(count '*' none)"
+  if [ -n "$me" ]; then
+    say "ресурсы harness этой сессии ($me): контейнеров $c, сетей $n, томов $v, образов $i" \
+        "harness resources of this session ($me): containers $c, networks $n, volumes $v, images $i"
+  else
+    say "сессия не определена (нет HARNESS_SESSION): своих ресурсов не выделить" \
+        "the session is unknown (no HARNESS_SESSION): own resources cannot be told apart"
+  fi
+  [ "$other" -eq 0 ] || say "  других сессий: $other — их не трогаю" "  other sessions: $other — left alone"
+  [ "$none" -eq 0 ] || say "  без метки сессии: $none — остановленные убирает docker-clean, работающие — docker-clean --all по слову владельца" \
+                           "  without a session label: $none — docker-clean removes the stopped ones, the running ones — docker-clean --all on the owner's word"
   [ $((c + n + v + i)) -eq 0 ]
 }
 
+# docker-clean [--all] — by default this session's resources and the stopped ones without a session label;
+# resources of other sessions stay. --all — every harness resource, only on the owner's word.
 cmd_docker_clean() {
+  local all=0 arg
+  for arg in "$@"; do
+    case "$arg" in
+      --all) all=1 ;;
+      *) err "неизвестный ключ: $arg" "unknown option: $arg"; return 1 ;;
+    esac
+  done
   local st=0
   docker_state || st=$?
   [ "$st" -eq 2 ] && { docker_hung_msg; return 1; }
   [ "$st" -eq 0 ] || { say "демон Docker остановлен — убирать нечего" "the Docker daemon is stopped — nothing to clean"; return 0; }
-  local ids
+  local list k ids
+  list="$(harness_classified)"
+  pick() { printf '%s\n' "$list" | awk -v k="$k" -v all="$all" -v w="$1" '
+    $1 != k { next }
+    w == "own"  { if (all || $3 == "own") print $2; next }
+    w == "none" { if (!all && $3 == "none" && (k != "containers" || $4 ~ /^(exited|created|dead)$/)) print $2 }'; }
+  # Own resources go with force. Ones without a session go without it: docker refuses a network, volume or image
+  # still in use, and only stopped containers are picked. Containers first: they hold networks and volumes.
   # shellcheck disable=SC2086  # ids are separate words on purpose
-  {
-    ids="$(harness_containers | sort -u)"; [ -z "$ids" ] || dk -t 120 rm -f -v $ids >/dev/null
-    ids="$(harness_networks | sort -u)";   [ -z "$ids" ] || dk -t 120 network rm $ids >/dev/null
-    ids="$(harness_volumes | sort -u)";    [ -z "$ids" ] || dk -t 120 volume rm -f $ids >/dev/null
-    ids="$(harness_images | sort -u)";     [ -z "$ids" ] || dk -t 120 rmi -f $ids >/dev/null
-  }
+  for k in containers networks volumes images; do
+    ids="$(pick own)"
+    if [ -n "$ids" ]; then
+      case "$k" in
+        containers) dk -t 120 rm -f -v $ids ;;
+        networks)   dk -t 120 network rm $ids ;;
+        volumes)    dk -t 120 volume rm -f $ids ;;
+        images)     dk -t 120 rmi -f $ids ;;
+      esac >/dev/null
+    fi
+    ids="$(pick none)"
+    if [ -n "$ids" ]; then
+      case "$k" in
+        containers) dk -t 120 rm -v $ids ;;
+        networks)   dk -t 120 network rm $ids ;;
+        volumes)    dk -t 120 volume rm $ids ;;
+        images)     dk -t 120 rmi $ids ;;
+      esac >/dev/null
+    fi
+  done
   cmd_docker_check
 }
 
@@ -1165,6 +1223,7 @@ cmd_selfcheck() {
 
   section "Docker"
   selfcheck_docker_hang
+  selfcheck_docker_clean
 
   say "Итог: ошибок $ERRORS" "Result: errors $ERRORS"
   [ "$ERRORS" -eq 0 ]
@@ -1184,6 +1243,44 @@ selfcheck_docker_hang() {
     fail "$(t "зависший docker ps: код $rc, $(( $(date +%s) - start )) с" "hanging docker ps: code $rc, $(( $(date +%s) - start )) s")"
   fi
   pkill -f "$tmp/docker" 2>/dev/null
+  rm -rf "$tmp"
+}
+
+# docker-clean removes this session's resources and stopped ones without a session; another session's and running
+# unlabelled containers stay. --all removes every harness resource and nothing else.
+selfcheck_docker_clean() {
+  local tmp got want
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/harness-docker.XXXXXX")" || { fail "mktemp"; return; }
+  cat > "$tmp/docker" <<STUB
+#!/bin/sh
+case "\$1 \$2" in
+  "info "*|"ps -q") exit 0 ;;
+  "ps -a")        printf 'c1\t1\taaaaaaaa-1111\t\trunning\nc2\t1\tbbbbbbbb\t\trunning\nc3\t1\t\t\texited\nc4\t1\t\t\trunning\nc5\t\t\tharness-x-aaaaaaaa\trunning\nc6\t\t\tshop\trunning\n' ;;
+  "network ls")   printf 'n1\t1\taaaaaaaa\t\t-\nn2\t\t\tharness-x-bbbbbbbb\t-\nn3\t1\t\t\t-\n' ;;
+  "volume ls")    printf 'v1\t\t\tharness-x-aaaaaaaa\t-\nv2\t1\t\t\t-\n' ;;
+  "images -q")    printf 'i1\ni2\ni3\n' ;;
+  "image inspect") printf 'sha256:i1 aaaaaaaa\nsha256:i2 <no value>\nsha256:i3 bbbbbbbb\n' ;;
+  *) echo "\$*" >> "$tmp/log" ;;
+esac
+STUB
+  chmod +x "$tmp/docker"
+  PATH="$tmp:$PATH" HARNESS_SESSION=aaaaaaaa "$ROOT/bin/harness" docker-clean >/dev/null 2>&1
+  got="$(cat "$tmp/log" 2>/dev/null)"
+  want="$(printf '%s\n' 'rm -f -v c1 c5' 'rm -v c3' 'network rm n1' 'network rm n3' 'volume rm -f v1' 'volume rm v2' 'rmi -f sha256:i1' 'rmi sha256:i2')"
+  if [ "$got" = "$want" ]; then
+    ok "$(t 'docker-clean убирает свою сессию и остановленное без метки, соседей и работающее без метки не трогает' 'docker-clean removes its own session and stopped unlabelled resources, leaves neighbours and running unlabelled ones')"
+  else
+    fail "$(t "docker-clean удалил не то: $(printf '%s' "$got" | tr '\n' ';')" "docker-clean removed the wrong set: $(printf '%s' "$got" | tr '\n' ';')")"
+  fi
+  rm -f "$tmp/log"
+  PATH="$tmp:$PATH" HARNESS_SESSION=aaaaaaaa "$ROOT/bin/harness" docker-clean --all >/dev/null 2>&1
+  got="$(cat "$tmp/log" 2>/dev/null)"
+  want="$(printf '%s\n' 'rm -f -v c1 c2 c3 c4 c5' 'network rm n1 n2 n3' 'volume rm -f v1 v2' 'rmi -f sha256:i1 sha256:i2 sha256:i3')"
+  if [ "$got" = "$want" ]; then
+    ok "$(t 'docker-clean --all убирает все ресурсы harness и только их' 'docker-clean --all removes every harness resource and only them')"
+  else
+    fail "$(t "docker-clean --all удалил не то: $(printf '%s' "$got" | tr '\n' ';')" "docker-clean --all removed the wrong set: $(printf '%s' "$got" | tr '\n' ';')")"
+  fi
   rm -rf "$tmp"
 }
 
@@ -2009,6 +2106,10 @@ hook_session_start() {
   if [ -d "$I18N/$HLANG" ] && lang_stale "$HLANG" && apply_lang "$HLANG"; then
     context="$context"$'\n'"$(t 'Правила и skills только что развёрнуты из i18n в .claude/ — в начале сессии их в контексте могло не быть. Прочитай сейчас .claude/CLAUDE.md и все файлы .claude/rules/ и следуй им.' 'Rules and skills were just deployed from i18n to .claude/ — they may have been absent from the context at session start. Read .claude/CLAUDE.md and every file in .claude/rules/ now and follow them.')"
   fi
+  # The session id for Docker labels (rules/docker.md): docker-clean tells its own resources from the neighbours'.
+  if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ "$sid" != default ]; then
+    printf 'export HARNESS_SESSION=%q\n' "$(printf '%s' "$sid" | tr -cd 'A-Za-z0-9_-' | cut -c1-8)" >> "$CLAUDE_ENV_FILE"
+  fi
   apply_identity; rc=$?
   if [ "$rc" -eq 2 ]; then
     if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
@@ -2408,7 +2509,7 @@ case "${1:-}" in
   check-commits)   shift; cmd_check_commits "$@" ;;
   docker-up)       cmd_docker_up ;;
   docker-check)    cmd_docker_check ;;
-  docker-clean)    cmd_docker_clean ;;
+  docker-clean)    shift; cmd_docker_clean "$@" ;;
   locks)           cmd_locks ;;
   unlock)          shift; cmd_unlock "$@" ;;
   worktree)        shift; cmd_worktree "$@" ;;

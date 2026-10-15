@@ -2,6 +2,13 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.10.0] — 2026-10-16
+
+### Changed
+
+- `bin/harness docker-clean` by default removes only this session's resources and stopped resources without a session label: running containers of neighbour sessions no longer vanish in the middle of their tests. `--all` removes every harness resource — only on the owner's word. A resource's session is the `harness.session` label or the suffix of a compose project named `harness-<project>-<session>`; the session start hook sets `HARNESS_SESSION`. The rule is in `rules/docker.md`.
+- `bin/harness docker-check` requires zeros only for this session and shows other sessions' and unlabelled resources separately; `doctor` warns about them.
+
 ## [1.9.4] — 2026-10-16
 
 ### Fixed

@@ -181,7 +181,7 @@ bin/harness <command>
 | `repo-remove`, `server-remove`, `service-remove` | Removal from the registry, with a backup. |
 | `reset [--delete-clones] [--yes]` | Empties the registry. Without `--yes` it only prints the plan. |
 | `check-commits [path]` | Author, committer and AI attribution in unpushed commits. |
-| `docker-up`, `docker-check`, `docker-clean` | Start the daemon and clean up the resources created by harness. |
+| `docker-up`, `docker-check`, `docker-clean` | Start the daemon and clean up the resources created by harness: by default only this session's, `--all` — all of them. |
 | `locks`, `unlock <name>` | Clones held by parallel sessions, and removing a lock when the owner says so. |
 | `worktree <name> <branch> [--remove]` | A separate working copy of a clone for a session that did not get the clone. |
 | `selfcheck` | Integrity of harness itself. |

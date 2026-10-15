@@ -4,15 +4,16 @@
 
 ## Всё, что запускаешь, помечай
 
-Уборка находит ресурсы по метке, поэтому без метки ничего не создавай.
+Уборка находит ресурсы по метке, а свои отличает от ресурсов соседних сессий по метке сессии. Без меток ничего не создавай. `HARNESS_SESSION` выставляет хук на старте сессии.
 
-- Compose: имя проекта с префиксом `harness-` — `docker compose -p harness-<проект> up -d`.
-- Отдельные ресурсы: `--label harness=1` для `docker run`, `docker network create`, `docker volume create`, `docker build`.
+- Compose: имя проекта `harness-<проект>-$HARNESS_SESSION` — `docker compose -p "harness-<проект>-$HARNESS_SESSION" up -d`.
+- Отдельные ресурсы: `--label harness=1 --label harness.session="$HARNESS_SESSION"` для `docker run`, `docker network create`, `docker volume create`, `docker build`.
 
 ## Убирай за собой
 
-- Сразу после теста или эксперимента, не дожидаясь конца сессии: `docker compose -p harness-<проект> down -v --remove-orphans`, затем `bin/harness docker-clean`.
-- Работа не считается законченной, пока `bin/harness docker-check` не показал нули. Убирай и тогда, когда тест упал.
+- Сразу после теста или эксперимента, не дожидаясь конца сессии: `docker compose -p "harness-<проект>-$HARNESS_SESSION" down -v --remove-orphans`, затем `bin/harness docker-clean`. Она убирает ресурсы этой сессии и остановленные ресурсы без метки сессии; ресурсы соседних сессий и работающие контейнеры без метки остаются.
+- Работа не считается законченной, пока `bin/harness docker-check` не показал нули по этой сессии. Убирай и тогда, когда тест упал.
+- `bin/harness docker-clean --all` убирает все ресурсы harness, в том числе работающие у соседних сессий, — только по слову владельца.
 - Если демон запускал ты и он больше не нужен, скажи об этом владельцу — останавливать сам демон не нужно.
 
 ## Чужое не трогай
