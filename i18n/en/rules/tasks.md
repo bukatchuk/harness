@@ -10,7 +10,7 @@ The Plane address, workspace and default project are recorded in `harness.json` 
 2. A task about a server or service — in the project of the repository responsible for it: `bin/harness map <server>`.
 3. In all other cases, and also if the repository has no project specified — in the default project from `harness.json`.
 
-Create a task about a repository with `--repo <name>`: in the default project it gets the label `repo:<name>`, so the tasks of different repositories do not mix.
+Create a task about a repository with `--repo <name>`: it gets the label `repo:<name>`, so the tasks of different repositories do not mix — neither in the default project nor in views across all projects.
 
 ## The task status is always current
 

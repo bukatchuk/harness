@@ -2,6 +2,19 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.9.2] — 2026-10-16
+
+### Changed
+
+- Registry of this installation: a repository renamed — the former name matched a common word and failed the leak check of the public build.
+
+## [1.9.1] — 2026-10-16
+
+### Changed
+
+- `bin/harness task create --repo` puts the `repo:<name>` label in any project, not only in the default one: a repository's tasks are found with one view across all projects. The rule is in `rules/tasks.md`.
+- Registry of this installation: a new repository.
+
 ## [1.9.0] — 2026-10-16
 
 ### Added

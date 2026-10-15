@@ -20,7 +20,7 @@ bin/harness task list [--repo <name> | --project <PROJECT>] [--state open|all|st
 bin/harness tasks [--stale 7]                         # tasks in progress across all projects and days without movement
 ```
 
-- `--repo` picks the repository's project from the registry. In the default project, which holds the tasks of many repositories, the task gets the label `repo:<name>`; the label is created when missing. `task list --repo <name>` shows the tasks with that label.
+- `--repo` picks the repository's project from the registry, and the task gets the label `repo:<name>` in any project; the label is created when missing. `task list --repo <name>` shows the tasks with that label.
 - The text is a Markdown file (paragraphs, `#` headings, `-` and `1.` lists, `` `code` ``, `**bold**`) or ready HTML. The hook and the command itself check it for AI attribution.
 - A task is given as `PROJECT-number`, for example `SHOP-12`; `create` and `show` print the link.
 - The session start hook names tasks in progress that have not moved for more than 7 days; the list is `bin/harness tasks --stale 7`.

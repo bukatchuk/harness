@@ -1657,7 +1657,7 @@ pl_item() {
 }
 
 # pl_target <repository> <project identifier> — "<project id><TAB><label>": the project of the repository from the
-# registry or the default one; in the default project, shared by many repositories, the task gets the label repo:<name>.
+# registry or the default one; a task about a repository gets the label repo:<name> in any project.
 pl_target() {
   local repo="$1" ident="$2" pid
   if [ -n "$repo" ]; then
@@ -1665,7 +1665,7 @@ pl_target() {
     jq -e --arg n "$repo" '.repos[] | select(.name == $n)' "$REGISTRY" >/dev/null || { err "репозитория $repo нет в реестре" "repository $repo is not in the registry"; return 1; }
     pid="$(jq -r --arg n "$repo" '.repos[] | select(.name == $n) | .plane_project_id // empty' "$REGISTRY")"
     [ -n "$pid" ] || pid="$(conf '.integrations.plane.default_project_id')"
-    if [ "$pid" = "$(conf '.integrations.plane.default_project_id')" ]; then printf '%s\trepo:%s\n' "$pid" "$repo"; else printf '%s\t\n' "$pid"; fi
+    printf '%s\trepo:%s\n' "$pid" "$repo"
     return 0
   fi
   if [ -n "$ident" ]; then
