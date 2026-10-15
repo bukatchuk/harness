@@ -14,7 +14,7 @@
 - `.claude/skills/` — процедуры: `commit`, `push`, `pr-create`, `repo-add`, `repo-remove`, `repo-sync`, `server-add`, `server-remove`, `service-add`, `service-remove`, `harness-reset`, `harness-update`, `harness-doctor`, `release-public`.
 - `.claude/integrations/` — шпаргалки по внешним сервисам (Plane, n8n, GitGuardian, GitLab, Yandex Cloud, mailcow, Timeweb Cloud). Прочитай нужную перед первым обращением к сервису, заранее не загружай. Интеграция включена, если её ключ есть в `harness.json`.
 - `i18n/` — исходники правил, skills и шпаргалок на русском и английском. Файлы в `.claude/` — их копия на выбранном языке; её создаёт `bin/harness lang`.
-- `bin/harness` — CLI: `init`, `lang`, `doctor`, `sync`, `status`, `servers`, `server-check`, `map`, `repo-remove`, `server-remove`, `service-remove`, `reset`, `check-commits`, `docker-up`, `docker-check`, `docker-clean`, `locks`, `unlock`, `worktree`, `forge`, `mr`, `mr-status`, `release-create`, `selfcheck`, `release-build`, `release-publish`.
+- `bin/harness` — CLI: `init`, `lang`, `doctor`, `sync`, `status`, `servers`, `server-check`, `map`, `repo-remove`, `server-remove`, `service-remove`, `reset`, `check-commits`, `docker-up`, `docker-check`, `docker-clean`, `locks`, `unlock`, `worktree`, `forge`, `mr`, `mr-status`, `release-create`, `task`, `tasks`, `selfcheck`, `release-build`, `release-publish`.
 
 ## Работа с проектами
 

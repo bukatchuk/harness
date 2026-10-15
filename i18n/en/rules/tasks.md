@@ -2,13 +2,15 @@
 
 This rule applies if `harness.json` has the key `integrations.plane`. If it is absent, no task tracker is connected: do not create tasks, and tell the owner so when they ask.
 
-The Plane address, workspace and default project are recorded in `harness.json` (`integrations.plane`: `url`, `workspace`, `default_project`, `default_project_id`). How to call the API is in `.claude/integrations/plane.md`.
+The Plane address, workspace and default project are recorded in `harness.json` (`integrations.plane`: `url`, `workspace`, `default_project`, `default_project_id`). Handle tasks with the commands `bin/harness task` and `bin/harness tasks` — how, in `.claude/integrations/plane.md`.
 
 ## Which project to create in
 
 1. A task about a project from the registry — in its Plane project: the fields `plane_project` and `plane_project_id` in `registry/repos.json`.
 2. A task about a server or service — in the project of the repository responsible for it: `bin/harness map <server>`.
 3. In all other cases, and also if the repository has no project specified — in the default project from `harness.json`.
+
+Create a task about a repository with `--repo <name>`: in the default project it gets the label `repo:<name>`, so the tasks of different repositories do not mix.
 
 ## The task status is always current
 
@@ -24,7 +26,7 @@ If only part of a task is done and the owner did not ask to do the rest now, do 
 
 In the final message to the owner, state the current status of every affected task.
 
-State identifiers are specific to each project: take them from the `/states/` of that project by the `group` field (`started` — In Progress, `completed` — Done).
+Change the state with `bin/harness task state <PROJECT-N> started|done|cancelled`. The session start hook reports how many tasks in progress have not moved for more than 7 days: if some of them are yours, bring them up to date, show the rest to the owner.
 
 ## How to create
 

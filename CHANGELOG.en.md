@@ -2,6 +2,18 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.9.0] — 2026-10-16
+
+### Added
+
+- Plane task commands: `bin/harness task create|state|comment|link|show|list`. The project is picked from the registry (`--repo`), the state by its group (`todo`, `started`, `done`…), the task and comment text comes from a Markdown or HTML file, without whitespace between tags. The commands walk through pages, wait at the request limit and check the text for AI attribution. Before, the agent wrote the API calls anew in every session. Described in `integrations/plane.md`.
+- The `repo:<name>` label: a task about a repository in the default project gets it automatically, `task list --repo` shows the repository's tasks. The rule is in `rules/tasks.md`.
+- `bin/harness tasks [--stale N]` — tasks in progress across all projects and how many days they have not moved. The session start hook reports the number of tasks that have not moved for more than 7 days; the count runs in the background and does not slow the start.
+
+### Changed
+
+- The `pr-create` skill: the request link is attached to the task in Plane (`task link`).
+
 ## [1.8.0] — 2026-10-15
 
 ### Added

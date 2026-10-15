@@ -18,6 +18,7 @@ Create a pull request. Arguments: $ARGUMENTS
 6. Put the description in a file and create the request where the repository lives (`bin/harness forge <path>`). No "Generated with …" and no 🤖.
    - `github` — from the repository directory: `gh pr create --base <base> --title "<title>" --body-file <file>`;
    - `gitlab` — `bin/harness mr <path> --base <base> --title "<title>" --body-file <file>`.
-7. Return the request link to the owner. The pipeline state in GitLab: `bin/harness mr-status <path> <number>`.
+7. If the request belongs to a task in Plane, attach the link to it: `bin/harness task link <PROJECT-N> <request link>`.
+8. Return the request link to the owner. The pipeline state in GitLab: `bin/harness mr-status <path> <number>`.
 
 Merging is a separate action: when the owner asks, or by the project's rules if they allow merging on a green pipeline.

@@ -2,36 +2,41 @@
 
 Трекер задач. Интеграция включена, если в `harness.json` есть ключ `integrations.plane`.
 
-- Адрес и рабочее пространство — в `harness.json`: `integrations.plane.url`, `integrations.plane.workspace`.
-- База API: `<url>/api/v1`
-- Авторизация: заголовок `X-API-Key: $PLANE_TOKEN`
-- Токен выпускается в Plane: Profile Settings → Personal Access Tokens.
-- Документация: https://developers.plane.so/api-reference/introduction
+- Адрес, рабочее пространство и проект по умолчанию — в `harness.json`: `integrations.plane.url`, `workspace`, `default_project_id`.
+- Авторизация: `PLANE_TOKEN` в окружении. Токен выпускается в Plane: Profile Settings → Personal Access Tokens.
+- Документация API: https://developers.plane.so/api-reference/introduction
 
-## Вызов
+## Команды harness
+
+Задачи веди командами `bin/harness`, а не прямыми запросами к API: они сами выбирают проект по реестру, находят состояние по группе, переводят текст в HTML, листают страницы и ждут при лимите запросов.
 
 ```bash
-PLANE_URL="$(jq -r '.integrations.plane.url' harness.json)"
-WS="$(jq -r '.integrations.plane.workspace' harness.json)"
-plane() { curl -sS --max-time 20 -H @<(printf 'X-API-Key: %s' "$PLANE_TOKEN") -H 'Content-Type: application/json' "$PLANE_URL/api/v1$1" "${@:2}"; }
-
-plane /users/me/ | jq '{id, email, display_name}'
-plane "/workspaces/$WS/projects/" | jq '.results[] | {id, identifier, name}'
-plane "/workspaces/$WS/projects/$PROJECT_ID/issues/?per_page=20" | jq '.results[] | {sequence_id, name, state, priority}'
+bin/harness task create --title "<заголовок>" --body-file /абсолютный/путь.md [--repo <имя> | --project <ПРОЕКТ>] [--parent <ПРОЕКТ-N>] [--state todo] [--priority medium]
+bin/harness task state <ПРОЕКТ-N> started            # backlog, todo, started, done, cancelled
+bin/harness task comment <ПРОЕКТ-N> --body-file /абсолютный/путь.md
+bin/harness task link <ПРОЕКТ-N> <url> [--title "<название>"]   # MR, релиз, конвейер
+bin/harness task show <ПРОЕКТ-N>
+bin/harness task list [--repo <имя> | --project <ПРОЕКТ>] [--state open|all|started|…] [--limit N]
+bin/harness tasks [--stale 7]                        # задачи в работе по всем проектам и дни без движения
 ```
 
-`$WS` — slug рабочего пространства. Проект берётся из полей `plane_project` (идентификатор, например `SHOP`) и `plane_project_id` в `registry/repos.json`. Как выбрать проект для задачи и какой проект используется по умолчанию — в `.claude/rules/tasks.md`.
+- `--repo` выбирает проект репозитория из реестра. В проекте по умолчанию, где лежат задачи многих репозиториев, задача получает метку `repo:<имя>`; метка создаётся, если её нет. `task list --repo <имя>` показывает задачи по этой метке.
+- Текст — файл в Markdown (абзацы, заголовки `#`, списки `-` и `1.`, `` `код` ``, `**жирный**`) или готовый HTML. Хук и сама команда проверяют его на AI-атрибуцию.
+- Задача указывается как `ПРОЕКТ-номер`, например `SHOP-12`; ссылку печатают `create` и `show`.
+- Задачи в работе без движения дольше 7 дней называет хук на старте сессии; список — `bin/harness tasks --stale 7`.
 
-Ссылка на задачу для владельца: `<url>/<workspace>/browse/<ИДЕНТИФИКАТОР>-<номер>/`.
+## Прямые запросы к API
 
-## Особенности API
+Нужны для того, чего команды не умеют. База — `<url>/api/v1/workspaces/<workspace>`, заголовок `X-API-Key: $PLANE_TOKEN`.
 
-- При создании задачи Plane игнорирует `state_id` и молча кладёт её в Backlog. После создания сделай `PATCH` с полем `state` (не `state_id`).
-- Идентификаторы состояний свои у каждого проекта: бери их из `/workspaces/$WS/projects/$PROJECT_ID/states/`, не переноси из другого проекта.
+- `GET /work-items/<ПРОЕКТ-N>/` — задача по номеру.
+- `fields=id,name,state,updated_at` — только нужные поля: ответ легче и быстрее; `expand=state` — состояние объектом с полем `group`.
+- Фильтров по состоянию у списка нет: фильтруй через `jq`.
+- При создании задачи Plane игнорирует состояние и кладёт её в Backlog — состояние меняется отдельным `PATCH` с полем `state`.
+- В HTML не должно быть пробелов и переносов между тегами: Plane превращает их в пустые пункты списка.
 
 ## Правила
 
-- Всегда выбирай поля через `jq`: ответы Plane объёмные, целиком в контекст их не выводи.
-- Списки разбиты на страницы: `per_page` и `cursor`.
-- Читать можно свободно. Создавать и менять задачи — по просьбе владельца; массовые изменения — после подтверждения.
+- Выбирай поля через `jq` или `fields`: ответы Plane объёмные, целиком в контекст их не выводи.
+- Читать можно свободно. Создавать и менять задачи — по просьбе владельца и по `.claude/rules/tasks.md`; массовые изменения — после подтверждения.
 - Ограничение — 60 запросов в минуту на токен.

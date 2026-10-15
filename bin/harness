@@ -106,6 +106,12 @@ GitLab (интеграция gitlab)
   release-create <путь> <тег> --title <заголовок> --notes-file <файл>
                            релиз на существующий тег
 
+Plane (интеграция plane)
+  task create|state|comment|link|show|list …
+                           задачи: создать, сменить состояние, комментарий, ссылка, показать, список
+  tasks [--stale N] [--count]
+                           задачи в работе по всем проектам и сколько дней они без движения
+
 Публичный релиз
   release-build [--preview]   собрать открытую версию без данных владельца и проверить на утечки
   release-publish [--push]    показать или отправить релиз в публичный репозиторий
@@ -154,6 +160,12 @@ GitLab (the gitlab integration)
                            the pipeline and whether the request can be merged
   release-create <path> <tag> --title <title> --notes-file <file>
                            a release for an existing tag
+
+Plane (the plane integration)
+  task create|state|comment|link|show|list …
+                           tasks: create, change the state, comment, link, show, list
+  tasks [--stale N] [--count]
+                           tasks in progress across all projects and how many days they have not moved
 
 Public release
   release-build [--preview]   build the open version without owner data and scan it for leaks
@@ -1130,6 +1142,14 @@ selfcheck_texts() {
   text_case 0 "$(t 'команда внутри подстановки читает файл без скобки' 'a command inside a substitution reads the file without the parenthesis')" "url=\$(bin/harness mr repos/x --title Fix --body-file $tmp/clean.md)"
   text_case 2 "$(t 'файл описания, которого нет, отклонён' 'a missing text file is refused')" "bin/harness mr repos/x --title Fix --body-file $tmp/none.md"
   text_case 2 "$(t 'AI-атрибуция в описании PR в GitHub отклонена' 'AI attribution in a GitHub PR text is refused')" "gh pr create --title Fix --body-file $tmp/ai.md"
+  text_case 0 "$(t 'комментарий к задаче Plane с чистым текстом проходит' 'a Plane task comment with a clean text passes')" "bin/harness task comment X-1 --body-file $tmp/clean.md"
+  text_case 2 "$(t 'AI-атрибуция в комментарии к задаче Plane отклонена' 'AI attribution in a Plane task comment is refused')" "bin/harness task comment X-1 --body-file $tmp/ai.md"
+  printf '### Решение\n- a & `b`\n- **c**\n\nтекст\nещё\n' > "$tmp/md.md"
+  if [ "$(pl_html "$tmp/md.md")" = '<h3>Решение</h3><ul><li>a &amp; <code>b</code></li><li><strong>c</strong></li></ul><p>текст<br>ещё</p>' ]; then
+    ok "$(t 'Markdown для Plane превращается в HTML без пробелов между тегами' 'Markdown for Plane becomes HTML without whitespace between tags')"
+  else
+    fail "$(t 'Markdown для Plane: неверный HTML' 'Markdown for Plane: wrong HTML'): $(pl_html "$tmp/md.md")"
+  fi
   unset -f text_case
   rm -rf "$tmp"
 }
@@ -1563,10 +1583,349 @@ cmd_release_create() {
   printf '%s' "$res" | jq -r '._links.self'
 }
 
+# --- Plane --------------------------------------------------------------------
+
+# Days without movement after which a task in progress counts as stale.
+PLANE_STALE_DAYS=7
+# How often the session start refreshes the stale-task count in the background, in seconds.
+PLANE_STALE_INTERVAL=3600
+
+pl_ready() {
+  need_jq
+  integration_on plane || { err "интеграция plane не подключена: integrations.plane в harness.json" "the plane integration is not enabled: integrations.plane in harness.json"; return 1; }
+  [ -n "${PLANE_TOKEN:-}" ] || { err "PLANE_TOKEN не задан в окружении" "PLANE_TOKEN is not set in the environment"; return 1; }
+}
+
+# pl_api <path inside the workspace> [curl args] — the token goes in a header and only to the Plane of this installation.
+# Plane allows 60 requests a minute: on 429 the call waits and retries. A body is passed with -d, not stdin.
+pl_api() {
+  local url out code i
+  url="$(conf '.integrations.plane.url')"
+  url="${url%/}/api/v1/workspaces/$(conf '.integrations.plane.workspace')"
+  for i in 1 2 3 4; do
+    out="$(curl -sS --max-time 30 -w '\n%{http_code}' -H @<(printf 'X-API-Key: %s' "$PLANE_TOKEN") \
+      -H 'Content-Type: application/json' "$url$1" "${@:2}")" || return 1
+    code="${out##*$'\n'}"; out="${out%$'\n'*}"
+    { [ "$code" = 429 ] && [ "$i" -lt 4 ]; } || break
+    sleep $((i * 15))
+  done
+  printf '%s' "$out"
+  case "$code" in 2??) return 0 ;; *) return 1 ;; esac
+}
+
+pl_fail() {
+  local m
+  m="$(printf '%s' "$1" | jq -rc '.error // .detail // .message // .' 2>/dev/null | cut -c1-300)"
+  err "Plane: ${m:-нет ответа}" "Plane: ${m:-no response}"
+  return 1
+}
+
+# pl_all <path> — every page of a list as one JSON array.
+pl_all() {
+  local cursor="" sep='?' res tmp
+  case "$1" in *\?*) sep='&' ;; esac
+  tmp="$(mktemp "${TMPDIR:-/tmp}/harness-plane.XXXXXX")" || return 1
+  while :; do
+    res="$(pl_api "$1${sep}per_page=100${cursor:+&cursor=$cursor}")" || { rm -f "$tmp"; pl_fail "$res"; return 1; }
+    printf '%s' "$res" | jq -c '.results' >> "$tmp"
+    [ "$(printf '%s' "$res" | jq -r '.next_page_results')" = true ] || break
+    cursor="$(printf '%s' "$res" | jq -r '.next_cursor')"
+  done
+  jq -sc 'add // []' "$tmp"; rm -f "$tmp"
+}
+
+pl_url() { local u; u="$(conf '.integrations.plane.url')"; echo "${u%/}/$(conf '.integrations.plane.workspace')/browse/$1/"; }
+
+# pl_group <name> — the state group by its name or a short alias.
+pl_group() {
+  case "$1" in
+    backlog) echo backlog ;;
+    todo|unstarted) echo unstarted ;;
+    progress|in-progress|started) echo started ;;
+    done|completed) echo completed ;;
+    cancel|cancelled|canceled) echo cancelled ;;
+    *) err "неизвестное состояние «$1»: backlog, todo, started, done, cancelled" "unknown state \"$1\": backlog, todo, started, done, cancelled"; return 1 ;;
+  esac
+}
+
+# pl_item <IDENT-N> — the work item as JSON.
+pl_item() {
+  local res
+  printf '%s' "$1" | grep -Eq '^[A-Za-z0-9]+-[0-9]+$' || { err "задача указывается как ПРОЕКТ-номер: $1" "a task is given as PROJECT-number: $1"; return 1; }
+  res="$(pl_api "/work-items/$1/")" || { pl_fail "$res"; return 1; }
+  printf '%s' "$res"
+}
+
+# pl_target <repository> <project identifier> — "<project id><TAB><label>": the project of the repository from the
+# registry or the default one; in the default project, shared by many repositories, the task gets the label repo:<name>.
+pl_target() {
+  local repo="$1" ident="$2" pid
+  if [ -n "$repo" ]; then
+    need_registry
+    jq -e --arg n "$repo" '.repos[] | select(.name == $n)' "$REGISTRY" >/dev/null || { err "репозитория $repo нет в реестре" "repository $repo is not in the registry"; return 1; }
+    pid="$(jq -r --arg n "$repo" '.repos[] | select(.name == $n) | .plane_project_id // empty' "$REGISTRY")"
+    [ -n "$pid" ] || pid="$(conf '.integrations.plane.default_project_id')"
+    if [ "$pid" = "$(conf '.integrations.plane.default_project_id')" ]; then printf '%s\trepo:%s\n' "$pid" "$repo"; else printf '%s\t\n' "$pid"; fi
+    return 0
+  fi
+  if [ -n "$ident" ]; then
+    pid="$(pl_api "/projects/" | jq -r --arg i "$ident" '.results[] | select(.identifier == $i) | .id' | head -1)"
+    [ -n "$pid" ] || { err "проекта $ident нет в Plane" "project $ident is not in Plane"; return 1; }
+    printf '%s\t\n' "$pid"; return 0
+  fi
+  pid="$(conf '.integrations.plane.default_project_id')"
+  [ -n "$pid" ] || { err "в harness.json нет integrations.plane.default_project_id" "harness.json has no integrations.plane.default_project_id"; return 1; }
+  printf '%s\t\n' "$pid"
+}
+
+# pl_label_id <project id> <name> — the label id; the label is created when missing.
+pl_label_id() {
+  local id res
+  id="$(pl_api "/projects/$1/labels/?per_page=100" | jq -r --arg n "$2" '.results[]? | select(.name == $n) | .id' | head -1)"
+  if [ -z "$id" ]; then
+    res="$(pl_api "/projects/$1/labels/" -X POST -d "$(jq -nc --arg n "$2" '{name: $n, color: "#64748b"}')")" || { pl_fail "$res"; return 1; }
+    id="$(printf '%s' "$res" | jq -r '.id')"
+  fi
+  echo "$id"
+}
+
+# pl_set_state <project id> <item id> <group> — prints the name of the new state.
+pl_set_state() {
+  local states sid res
+  states="$(pl_api "/projects/$1/states/")" || { pl_fail "$states"; return 1; }
+  sid="$(printf '%s' "$states" | jq -r --arg g "$3" '[.results[] | select(.group == $g)] | sort_by(.sequence) | .[0].id // empty')"
+  [ -n "$sid" ] || { err "в проекте нет состояния группы $3" "the project has no state of group $3"; return 1; }
+  res="$(pl_api "/projects/$1/issues/$2/" -X PATCH -d "$(jq -nc --arg s "$sid" '{state: $s}')")" || { pl_fail "$res"; return 1; }
+  printf '%s' "$states" | jq -r --arg s "$sid" '.results[] | select(.id == $s) | .name'
+}
+
+# pl_html <file> — HTML for Plane. A file that starts with a tag is taken as HTML; otherwise simple Markdown:
+# paragraphs, "#" headings, "-" and "1." lists, `code` and **bold**. Whitespace between tags is dropped:
+# Plane turns it into empty list items.
+pl_html() {
+  jq -Rrs '
+    def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
+    def inl: esc | gsub("`(?<c>[^`]+)`"; "<code>\(.c)</code>") | gsub("\\*\\*(?<b>[^*]+)\\*\\*"; "<strong>\(.b)</strong>");
+    def blk: . as $l
+      | if ($l | length) == 0 then ""
+        elif ($l[0] | test("^#+ ")) then "<h3>" + ($l[0] | sub("^#+ +"; "") | inl) + "</h3>" + ($l[1:] | blk)
+        elif ($l | all(test("^ *[-*] "))) then "<ul>" + ($l | map("<li>" + (sub("^ *[-*] "; "") | inl) + "</li>") | join("")) + "</ul>"
+        elif ($l | all(test("^ *[0-9]+[.)] "))) then "<ol>" + ($l | map("<li>" + (sub("^ *[0-9]+[.)] "; "") | inl) + "</li>") | join("")) + "</ol>"
+        else "<p>" + ($l | map(inl) | join("<br>")) + "</p>" end;
+    if test("^\\s*<") then gsub(">\\s+<"; "><") | sub("^\\s+"; "") | sub("\\s+$"; "")
+    else [splits("\n[ \t]*\n") | select(test("\\S")) | sub("^\n+"; "") | sub("\\s+$"; "") | split("\n") | blk] | join("") end' "$1"
+}
+
+task_usage() {
+  err "использование:
+  bin/harness task create --title <заголовок> --body-file <файл> [--repo <имя> | --project <ПРОЕКТ>] [--parent <ПРОЕКТ-N>] [--state <состояние>] [--priority none|low|medium|high|urgent]
+  bin/harness task state <ПРОЕКТ-N> backlog|todo|started|done|cancelled
+  bin/harness task comment <ПРОЕКТ-N> --body-file <файл>
+  bin/harness task link <ПРОЕКТ-N> <url> [--title <название>]
+  bin/harness task show <ПРОЕКТ-N>
+  bin/harness task list [--repo <имя> | --project <ПРОЕКТ>] [--state <состояние>|open|all] [--limit N]" \
+"usage:
+  bin/harness task create --title <title> --body-file <file> [--repo <name> | --project <PROJECT>] [--parent <PROJECT-N>] [--state <state>] [--priority none|low|medium|high|urgent]
+  bin/harness task state <PROJECT-N> backlog|todo|started|done|cancelled
+  bin/harness task comment <PROJECT-N> --body-file <file>
+  bin/harness task link <PROJECT-N> <url> [--title <title>]
+  bin/harness task show <PROJECT-N>
+  bin/harness task list [--repo <name> | --project <PROJECT>] [--state <state>|open|all] [--limit N]"
+}
+
+# task <action> … — work items in Plane: create, change the state, comment, link, show, list.
+cmd_task() {
+  local action="${1:-}"
+  [ $# -gt 0 ] && shift
+  case "$action" in
+    create|state|comment|link|show|list) pl_ready || return 1; "task_$action" "$@" ;;
+    *) task_usage; return 1 ;;
+  esac
+}
+
+task_create() {
+  local title="" body="" repo="" proj="" parent="" group=unstarted prio=none target pid label pj res id seq ident
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --title) title="${2:-}"; shift 2 ;;
+      --body-file) body="${2:-}"; shift 2 ;;
+      --repo) repo="${2:-}"; shift 2 ;;
+      --project) proj="${2:-}"; shift 2 ;;
+      --parent) parent="${2:-}"; shift 2 ;;
+      --state) group="${2:-}"; shift 2 ;;
+      --priority) prio="${2:-}"; shift 2 ;;
+      *) err "неизвестный ключ: $1" "unknown option: $1"; return 1 ;;
+    esac
+  done
+  { [ -n "$title" ] && [ -n "$body" ]; } || { task_usage; return 1; }
+  no_ai_text "$title" "$body" || return 1
+  group="$(pl_group "$group")" || return 1
+  case "$prio" in none|low|medium|high|urgent) ;; *) err "неизвестный приоритет: $prio" "unknown priority: $prio"; return 1 ;; esac
+  target="$(pl_target "$repo" "$proj")" || return 1
+  pid="${target%%$'\t'*}"; label="${target#*$'\t'}"
+  pj="$(jq -nc --arg n "$title" --arg d "$(pl_html "$body")" --arg p "$prio" '{name: $n, description_html: $d, priority: $p}')"
+  if [ -n "$parent" ]; then
+    res="$(pl_item "$parent")" || return 1
+    pj="$(printf '%s' "$pj" | jq -c --arg p "$(printf '%s' "$res" | jq -r '.id')" '. + {parent: $p}')"
+  fi
+  if [ -n "$label" ]; then
+    res="$(pl_label_id "$pid" "$label")" || return 1
+    pj="$(printf '%s' "$pj" | jq -c --arg l "$res" '. + {labels: [$l]}')"
+  fi
+  res="$(pl_api "/projects/$pid/issues/" -X POST -d "$pj")" || { pl_fail "$res"; return 1; }
+  id="$(printf '%s' "$res" | jq -r '.id')"; seq="$(printf '%s' "$res" | jq -r '.sequence_id')"
+  ident="$(pl_api "/projects/$pid/" | jq -r '.identifier')"
+  # Plane ignores the state on creation and puts the item in Backlog: the state is set by a separate request.
+  if [ "$group" != backlog ]; then pl_set_state "$pid" "$id" "$group" >/dev/null || return 1; fi
+  echo "$ident-$seq $(pl_url "$ident-$seq")"
+}
+
+task_state() {
+  local key="${1:-}" group item name
+  { [ -n "$key" ] && [ -n "${2:-}" ]; } || { task_usage; return 1; }
+  group="$(pl_group "$2")" || return 1
+  item="$(pl_item "$key")" || return 1
+  name="$(pl_set_state "$(printf '%s' "$item" | jq -r '.project')" "$(printf '%s' "$item" | jq -r '.id')" "$group")" || return 1
+  echo "$key: $name"
+}
+
+task_comment() {
+  local key="${1:-}" body="" item res
+  [ $# -gt 0 ] && shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --body-file) body="${2:-}"; shift 2 ;;
+      *) err "неизвестный ключ: $1" "unknown option: $1"; return 1 ;;
+    esac
+  done
+  { [ -n "$key" ] && [ -n "$body" ]; } || { task_usage; return 1; }
+  no_ai_text "" "$body" || return 1
+  item="$(pl_item "$key")" || return 1
+  res="$(pl_api "/projects/$(printf '%s' "$item" | jq -r '.project')/issues/$(printf '%s' "$item" | jq -r '.id')/comments/" \
+    -X POST -d "$(jq -nc --arg h "$(pl_html "$body")" '{comment_html: $h}')")" || { pl_fail "$res"; return 1; }
+  say "$key: комментарий добавлен" "$key: comment added"
+}
+
+task_link() {
+  local key="${1:-}" url="${2:-}" title="" item res
+  [ $# -gt 1 ] && shift 2
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --title) title="${2:-}"; shift 2 ;;
+      *) err "неизвестный ключ: $1" "unknown option: $1"; return 1 ;;
+    esac
+  done
+  { [ -n "$key" ] && [ -n "$url" ]; } || { task_usage; return 1; }
+  item="$(pl_item "$key")" || return 1
+  res="$(pl_api "/projects/$(printf '%s' "$item" | jq -r '.project')/issues/$(printf '%s' "$item" | jq -r '.id')/links/" \
+    -X POST -d "$(jq -nc --arg u "$url" --arg t "$title" '{url: $u} + (if $t == "" then {} else {title: $t} end)')")" || { pl_fail "$res"; return 1; }
+  say "$key: ссылка добавлена" "$key: link added"
+}
+
+task_show() {
+  local key="${1:-}" item pid states labels comments
+  [ -n "$key" ] || { task_usage; return 1; }
+  item="$(pl_item "$key")" || return 1
+  pid="$(printf '%s' "$item" | jq -r '.project')"
+  states="$(pl_api "/projects/$pid/states/")" || { pl_fail "$states"; return 1; }
+  labels="$(pl_api "/projects/$pid/labels/?per_page=100")" || labels='{}'
+  comments="$(pl_api "/projects/$pid/issues/$(printf '%s' "$item" | jq -r '.id')/comments/" | jq '.results | length' 2>/dev/null)"
+  printf '%s' "$item" | jq -r --argjson s "$states" --argjson l "$labels" --arg k "$key" --arg u "$(pl_url "$key")" \
+    --arg c "${comments:-?}" --arg lang "$HLANG" '
+    (.state as $id | $s.results[] | select(.id == $id) | .name) as $state
+    | ([.labels[]? | if type == "object" then .name else (. as $id | $l.results[]? | select(.id == $id) | .name) end]
+       | join(", ")) as $labels
+    | if $lang == "ru" then
+        "\($k) \(.name)\nсостояние: \($state) · приоритет: \(.priority) · обновлена: \(.updated_at[:10]) · комментариев: \($c)"
+        + (if $labels != "" then "\nметки: \($labels)" else "" end) + "\n\($u)"
+      else
+        "\($k) \(.name)\nstate: \($state) · priority: \(.priority) · updated: \(.updated_at[:10]) · comments: \($c)"
+        + (if $labels != "" then "\nlabels: \($labels)" else "" end) + "\n\($u)"
+      end
+    + (if (.description_stripped // "") != "" then "\n\n" + (.description_stripped | .[:800]) else "" end)'
+}
+
+task_list() {
+  local repo="" proj="" state=open limit=50 target pid label ident items labels lid=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --repo) repo="${2:-}"; shift 2 ;;
+      --project) proj="${2:-}"; shift 2 ;;
+      --state) state="${2:-}"; shift 2 ;;
+      --limit) limit="${2:-}"; shift 2 ;;
+      *) err "неизвестный ключ: $1" "unknown option: $1"; return 1 ;;
+    esac
+  done
+  case "$state" in open|all) ;; *) state="$(pl_group "$state")" || return 1 ;; esac
+  printf '%s' "$limit" | grep -Eq '^[0-9]+$' || { err "--limit — число" "--limit takes a number"; return 1; }
+  target="$(pl_target "$repo" "$proj")" || return 1
+  pid="${target%%$'\t'*}"; label="${target#*$'\t'}"
+  ident="$(pl_api "/projects/$pid/" | jq -r '.identifier')"
+  if [ -n "$label" ]; then
+    labels="$(pl_api "/projects/$pid/labels/?per_page=100")" || { pl_fail "$labels"; return 1; }
+    lid="$(printf '%s' "$labels" | jq -r --arg n "$label" '.results[] | select(.name == $n) | .id' | head -1)"
+    [ -n "$lid" ] || { say "задач с меткой $label нет" "no tasks labelled $label"; return 0; }
+  fi
+  items="$(pl_all "/projects/$pid/issues/?expand=state&fields=id,sequence_id,name,state,updated_at,labels")" || return 1
+  printf '%s' "$items" | jq -r --arg st "$state" --arg lid "$lid" --arg i "$ident" --argjson n "$limit" '
+    def order: {"started": 0, "unstarted": 1, "backlog": 2, "completed": 3, "cancelled": 4}[.state.group];
+    map(select(($st == "all") or ($st == "open" and (.state.group | IN("backlog", "unstarted", "started"))) or (.state.group == $st)))
+    | map(select($lid == "" or ((.labels // []) | index($lid))))
+    | sort_by(order, (.updated_at | explode | map(-.)))
+    | .[:$n][] | "\($i)-\(.sequence_id)\t\(.state.name)\t\(.updated_at[:10])\t\(.name)"'
+}
+
+# tasks [--stale N] [--count] — tasks in progress across all projects and how many days they have not moved.
+cmd_tasks() {
+  local stale=0 count=0 projects p pid ident items out=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --stale) stale="${2:-}"; shift 2 ;;
+      --count) count=1; shift ;;
+      *) err "неизвестный ключ: $1" "unknown option: $1"; return 1 ;;
+    esac
+  done
+  printf '%s' "$stale" | grep -Eq '^[0-9]+$' || { err "--stale — число дней" "--stale takes a number of days"; return 1; }
+  pl_ready || return 1
+  projects="$(pl_api "/projects/")" || { pl_fail "$projects"; return 1; }
+  for p in $(printf '%s' "$projects" | jq -r '.results[] | select(.archived_at == null) | "\(.id):\(.identifier)"'); do
+    pid="${p%%:*}"; ident="${p#*:}"
+    items="$(pl_all "/projects/$pid/issues/?expand=state&fields=id,sequence_id,name,state,updated_at,labels")" || return 1
+    out="$out$(printf '%s' "$items" | jq -r --arg i "$ident" --argjson d "$stale" '
+      def ts: (.[0:19] + "Z" | fromdateiso8601)
+        - (.[19:] | sub("^\\.[0-9]+"; "") | if test("^[+-][0-9]{2}:[0-9]{2}$")
+            then ((.[1:3] | tonumber) * 3600 + (.[4:6] | tonumber) * 60) * (if .[0:1] == "-" then -1 else 1 end) else 0 end);
+      .[] | select(.state.group == "started") | ((now - (.updated_at | ts)) / 86400 | floor) as $days
+      | select($days >= $d) | "\($days)\t\($i)-\(.sequence_id)\t\(.name)"')"$'\n'
+  done
+  out="$(printf '%s' "$out" | grep . | sort -t$'\t' -k1,1nr)"
+  if [ "$count" -eq 1 ]; then printf '%s' "$out" | grep -c . ; return 0; fi
+  [ -n "$out" ] || { say "задач в работе нет" "no tasks in progress"; return 0; }
+  printf '%s\n' "$out" | while IFS=$'\t' read -r days key name; do
+    printf '%-14s %4s %s  %s\n' "$key" "$days" "$(t 'дн.' 'd')" "$name"
+  done
+}
+
+# The stale-task count for the session start: read from the cache, refreshed in the background so the start is not slowed.
+stale_tasks_line() {
+  local cache n age
+  integration_on plane && [ -n "${PLANE_TOKEN:-}" ] || return 0
+  cache="$(dirname "$(state_file x)")/plane-stale"
+  age=$(( $(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || stat -f %m "$cache" 2>/dev/null || echo 0) ))
+  if [ "$age" -gt "$PLANE_STALE_INTERVAL" ]; then
+    ( n="$("$ROOT/bin/harness" tasks --stale "$PLANE_STALE_DAYS" --count 2>/dev/null)" \
+        && printf '%s\n' "$n" > "$cache.tmp" && mv "$cache.tmp" "$cache" ) </dev/null >/dev/null 2>&1 &
+  fi
+  n="$(head -1 "$cache" 2>/dev/null | tr -cd '0-9')"
+  [ "${n:-0}" -gt 0 ] || return 0
+  say "в Plane задач в работе без движения дольше $PLANE_STALE_DAYS дн.: $n — bin/harness tasks --stale $PLANE_STALE_DAYS" \
+      "Plane tasks in progress that have not moved for more than $PLANE_STALE_DAYS days: $n — bin/harness tasks --stale $PLANE_STALE_DAYS"
+}
+
 # --- Claude Code hooks --------------------------------------------------------
 
 hook_session_start() {
-  local version update problems context message sid="default" owner fetched=1 rc
+  local version update problems context message sid="default" owner fetched=1 rc stale
   [ -t 0 ] || sid="$(jq -r '.session_id // "default"' 2>/dev/null)"
   # Version control of harness itself: the hooks from .githooks are enabled on every device.
   git -C "$ROOT" config --local core.hooksPath .githooks 2>/dev/null
@@ -1600,6 +1959,8 @@ hook_session_start() {
   problems="$(cmd_doctor --quiet 2>&1)"
   message="$version"
   [ -z "$update" ] || { message="$message · $update"; context="$context"$'\n'"$update"; }
+  stale="$(stale_tasks_line)"
+  [ -z "$stale" ] || { message="$message · $stale"; context="$context"$'\n'"$stale"; }
   [ "$fetched" -eq 1 ] || context="$context"$'\n'"$(t 'origin недоступен: наличие обновления не проверено.' 'origin is unreachable: the update check was skipped.')"
   if [ -n "$problems" ]; then
     message="$message · $(t 'окружение: есть замечания' 'environment: there are remarks')"
@@ -1935,7 +2296,7 @@ hook_guard_bash() {
     exit 2
   fi
 
-  printf '%s' "$cmd" | grep -Eq '(git[^|;&]*[[:space:]](commit|merge|tag|revert|cherry-pick|rebase)|gh[^|;&]*[[:space:]](pr|issue|release)|harness[^|;&]*[[:space:]](mr|release-create))([[:space:]]|$)' || exit 0
+  printf '%s' "$cmd" | grep -Eq '(git[^|;&]*[[:space:]](commit|merge|tag|revert|cherry-pick|rebase)|gh[^|;&]*[[:space:]](pr|issue|release)|harness[^|;&]*[[:space:]](mr|release-create|task))([[:space:]]|$)' || exit 0
 
   if printf '%s' "$cmd" | grep -Eiq "$AI_MARKERS"; then
     err "harness: в сообщении коммита, тега или PR есть AI-атрибуция (Co-Authored-By, «Generated with», 🤖). Убери её и повтори (см. .claude/rules/git.md)." \
@@ -1990,6 +2351,8 @@ case "${1:-}" in
   mr)              shift; cmd_mr "$@" ;;
   mr-status)       shift; cmd_mr_status "$@" ;;
   release-create)  shift; cmd_release_create "$@" ;;
+  task)            shift; cmd_task "$@" ;;
+  tasks)           shift; cmd_tasks "$@" ;;
   release-build)   shift; cmd_release_build "$@" ;;
   release-publish) shift; cmd_release_publish "$@" ;;
   hook)
