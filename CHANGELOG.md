@@ -2,6 +2,12 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [semver](https://semver.org/lang/ru/). English: [CHANGELOG.en.md](CHANGELOG.en.md).
 
+## [1.7.11] — 2026-10-15
+
+### Исправлено
+
+- `bin/harness worktree <имя> <ветка> --remove` удаляет и ветку рабочей копии, если всё из неё есть в `origin`: коммиты отправлены или влиты, в том числе squash-слиянием (сверка через `git cherry` и `git patch-id`). Иначе ветка остаётся, и команда говорит почему. Раньше ветка оставалась всегда, а удалить её из клона, занятого другой сессией, хук не давал. Проверка — в `bin/harness selfcheck`, правило — в `rules/git.md`.
+
 ## [1.7.10] — 2026-10-15
 
 ### Изменено

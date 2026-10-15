@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.7.11] — 2026-10-15
+
+### Fixed
+
+- `bin/harness worktree <name> <branch> --remove` deletes the branch of the working copy too when everything in it is in `origin`: the commits are pushed or merged, a squash merge included (checked with `git cherry` and `git patch-id`). Otherwise the branch stays and the command says why. Before, the branch always stayed, and the hook would not let it be deleted from a clone held by another session. Covered by `bin/harness selfcheck`, the rule is in `rules/git.md`.
+
 ## [1.7.10] — 2026-10-15
 
 ### Changed

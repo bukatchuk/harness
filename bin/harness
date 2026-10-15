@@ -10,7 +10,7 @@ REGISTRY="$ROOT/registry/repos.json"
 SERVERS="$ROOT/registry/servers.json"
 SERVICES="$ROOT/registry/services.json"
 REPOS_DIR="${HARNESS_REPOS_DIR:-$ROOT/repos}"
-WORKTREES_DIR="$ROOT/worktrees"
+WORKTREES_DIR="${HARNESS_WORKTREES_DIR:-$ROOT/worktrees}"
 I18N="$ROOT/i18n"
 ACTIVE="$ROOT/.claude"
 SETTINGS="$ACTIVE/settings.json"
@@ -1101,6 +1101,7 @@ cmd_selfcheck() {
 
   section "$(t 'Блокировки клонов' 'Clone locks')"
   selfcheck_locks
+  selfcheck_worktree
 
   section "$(t 'Тексты запросов и релизов' 'Texts of requests and releases')"
   selfcheck_texts
@@ -1174,6 +1175,36 @@ selfcheck_locks() {
   edit_case 0 "$(t 'в ветке без хозяина работу можно продолжить' 'work may go on in a branch with no holder')" D "$r/beta/file.txt"
   lock_case 0 "$(t 'команда в отдельной рабочей копии не блокируется' 'a command in a separate working copy is not blocked')" Z "$WORKTREES_DIR/alpha/x" "git commit -m y"
   unset -f lock_case edit_case
+  rm -rf "$tmp"
+}
+
+selfcheck_worktree() {
+  local tmp c g h
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/harness-wt.XXXXXX")" || { fail "mktemp"; return; }
+  g=(git -c user.name=selfcheck -c user.email=selfcheck@localhost)
+  git init -q --bare -b main "$tmp/origin.git"
+  "${g[@]}" clone -q "$tmp/origin.git" "$tmp/seed" 2>/dev/null
+  "${g[@]}" -C "$tmp/seed" commit -q --allow-empty -m init && git -C "$tmp/seed" push -q origin main
+  mkdir -p "$tmp/repos" && git clone -q "$tmp/origin.git" "$tmp/repos/gamma"
+  h=(env HARNESS_REPOS_DIR="$tmp/repos" HARNESS_WORKTREES_DIR="$tmp/wt" "$ROOT/bin/harness" worktree gamma)
+  # wt_case <0 — the branch is deleted | 1 — it is kept> <label> <branch>
+  wt_case() {
+    "${h[@]}" "$3" --remove >/dev/null 2>&1
+    if git -C "$tmp/repos/gamma" show-ref --verify --quiet "refs/heads/$3"; then c=1; else c=0; fi
+    if [ "$c" -eq "$1" ]; then ok "$2"; else fail "$2"; fi
+  }
+  "${h[@]}" empty >/dev/null
+  wt_case 0 "$(t '--remove удаляет ветку без коммитов' '--remove deletes a branch with no commits')" empty
+  "${h[@]}" local >/dev/null && "${g[@]}" -C "$tmp/wt/gamma/local" commit -q --allow-empty -m wip
+  wt_case 1 "$(t '--remove оставляет ветку с неотправленным коммитом' '--remove keeps a branch with an unpushed commit')" local
+  "${h[@]}" pushed >/dev/null && "${g[@]}" -C "$tmp/wt/gamma/pushed" commit -q --allow-empty -m done && git -C "$tmp/wt/gamma/pushed" push -q origin pushed 2>/dev/null
+  wt_case 0 "$(t '--remove удаляет отправленную ветку' '--remove deletes a pushed branch')" pushed
+  "${h[@]}" squashed >/dev/null
+  for c in a b; do echo "$c" > "$tmp/wt/gamma/squashed/$c.txt"; git -C "$tmp/wt/gamma/squashed" add "$c.txt"; "${g[@]}" -C "$tmp/wt/gamma/squashed" commit -q -m "$c"; done
+  git -C "$tmp/seed" pull -q origin main 2>/dev/null; echo a > "$tmp/seed/a.txt"; echo b > "$tmp/seed/b.txt"
+  git -C "$tmp/seed" add a.txt b.txt && "${g[@]}" -C "$tmp/seed" commit -q -m squash && git -C "$tmp/seed" push -q origin main
+  wt_case 0 "$(t '--remove удаляет ветку, влитую squash-слиянием' '--remove deletes a branch merged by squash')" squashed
+  unset -f wt_case
   rm -rf "$tmp"
 }
 
@@ -1822,6 +1853,46 @@ cmd_unlock() {
 }
 
 # worktree <repo> <branch> [--remove] — a separate working copy of a clone for a parallel session.
+# After a working copy is removed its branch goes too, but only when nothing in it would be lost:
+# every commit is on a remote branch or, after a squash merge, has an equal change in the default branch.
+# Otherwise the branch stays and the reason is printed. The shared clone may be held by another
+# session, so the hook would not let the branch be deleted from there by hand.
+worktree_drop_branch() {
+  local name="$1" branch="$2" dir="$REPOS_DIR/$1" def left
+  git -C "$dir" show-ref --verify --quiet "refs/heads/$branch" || return 0
+  def="$(repo_default_branch "$name")"
+  if [ "$branch" = "$def" ]; then return 0; fi
+  if git -C "$dir" worktree list --porcelain | grep -qxF "branch refs/heads/$branch"; then
+    say "Ветка $branch оставлена: она открыта в другой рабочей копии." "Branch $branch is kept: it is checked out in another working copy."
+    return 0
+  fi
+  git -C "$dir" fetch --quiet --prune origin 2>/dev/null
+  left="$(git -C "$dir" rev-list --count "$branch" --not --remotes 2>/dev/null)"
+  if [ "${left:-1}" -gt 0 ] && git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/$def"; then
+    left="$(git -C "$dir" cherry "origin/$def" "$branch" 2>/dev/null | grep -c '^+')"
+    # A squash merge of several commits: the whole change of the branch equals one commit of the default branch.
+    if [ "$left" -gt 0 ] && worktree_squashed "$dir" "origin/$def" "$branch"; then left=0; fi
+  fi
+  if [ "${left:-1}" -gt 0 ]; then
+    say "Ветка $branch оставлена: коммитов, которых нет в origin, — $left. Отправь их или удали ветку сам." \
+        "Branch $branch is kept: $left commit(s) are not in origin. Push them or delete the branch yourself."
+    return 0
+  fi
+  git -C "$dir" branch -D --quiet "$branch" >/dev/null && say "Ветка $branch удалена: всё из неё есть в origin." "Branch $branch is deleted: everything in it is in origin."
+}
+
+# worktree_squashed <clone> <default ref> <branch> — the change of the branch since the fork point is a commit of the default branch.
+worktree_squashed() {
+  local dir="$1" base want c
+  base="$(git -C "$dir" merge-base "$2" "$3" 2>/dev/null)" || return 1
+  want="$(git -C "$dir" diff "$base" "$3" | git patch-id --stable | cut -d' ' -f1)"
+  [ -n "$want" ] || return 1
+  for c in $(git -C "$dir" rev-list --no-merges "$base..$2" 2>/dev/null); do
+    [ "$(git -C "$dir" show "$c" | git patch-id --stable | cut -d' ' -f1)" = "$want" ] && return 0
+  done
+  return 1
+}
+
 cmd_worktree() {
   local name="${1:-}" branch="${2:-}" remove="${3:-}" dir path def
   if [ -z "$name" ] || [ -z "$branch" ]; then err "использование: bin/harness worktree <репозиторий> <ветка> [--remove]" "usage: bin/harness worktree <repository> <branch> [--remove]"; exit 1; fi
@@ -1831,6 +1902,7 @@ cmd_worktree() {
   if [ "$remove" = "--remove" ]; then
     git -C "$dir" worktree remove "$path" || exit 1
     say "Рабочая копия удалена: $path" "The working copy is removed: $path"
+    worktree_drop_branch "$name" "$branch"
     return 0
   fi
   if [ -d "$path" ]; then echo "$path"; return 0; fi

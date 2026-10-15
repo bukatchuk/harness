@@ -25,7 +25,7 @@ Several sessions may work in the clones under `repos/` at the same time. A hook 
 
 - A session that starts changing a clone (a branch, a commit, a file edit) holds it. A clone on its main branch with no uncommitted changes is free.
 - If you are refused with "another session works in repos/<name>", do not work around it. Create your own working copy and work there, no need to ask the owner: `bin/harness worktree <name> <branch>` prints the directory `worktrees/<name>/<branch>`. Run every further command and edit in it; push and PR work from there as usual.
-- When you are done, remove the copy: `bin/harness worktree <name> <branch> --remove`.
+- When you are done, remove the copy: `bin/harness worktree <name> <branch> --remove`. Its branch goes with it when everything in it is in `origin` (pushed or merged, a squash merge included); otherwise the command keeps the branch and says why.
 - Never remove a lock yourself. `bin/harness unlock <name>` is only for when the owner says so; `bin/harness locks` shows the held clones.
 - Delete only the branches you created in this session, and name each one. The hook refuses deleting branches by a list, through a variable or with `xargs`.
 - When you finish working in a clone, return it to its main branch with no uncommitted changes: that frees it for the others.
