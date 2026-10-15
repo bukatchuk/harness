@@ -508,19 +508,51 @@ http_check() {
   esac
 }
 
+# dk [-t <seconds>] <docker args> — docker with a time limit. A daemon can answer `docker info` and still hang on
+# `docker ps`; without a limit the session start hook waits for it forever. Code 124 — the command was killed.
+dk() {
+  local secs="${HARNESS_DOCKER_TIMEOUT:-10}" pid watcher rc
+  if [ "${1:-}" = -t ]; then secs="$2"; shift 2; fi
+  docker "$@" 2>/dev/null &
+  pid=$!
+  ( sleep "$secs"; kill "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  watcher=$!
+  wait "$pid" 2>/dev/null; rc=$?
+  kill "$watcher" 2>/dev/null
+  # 143 — SIGTERM from the watcher: the docker client does not exit with it on its own.
+  [ "$rc" -eq 143 ] && return 124
+  return "$rc"
+}
+
+# docker_state — 0: the daemon answers; 1: it is stopped; 2: it hangs (info or ps do not finish in time).
+docker_state() {
+  local rc
+  dk info >/dev/null; rc=$?
+  [ "$rc" -eq 124 ] && return 2
+  [ "$rc" -eq 0 ] || return 1
+  dk ps -q --latest >/dev/null; rc=$?
+  [ "$rc" -eq 124 ] && return 2
+  return 0
+}
+
+docker_hung_msg() {
+  err "Docker не отвечает: команда docker не завершилась за ${HARNESS_DOCKER_TIMEOUT:-10} с — перезапусти Docker Desktop" \
+      "Docker does not respond: a docker command did not finish within ${HARNESS_DOCKER_TIMEOUT:-10} s — restart Docker Desktop"
+}
+
 harness_containers() {
-  docker ps -aq --filter label=harness=1 2>/dev/null
-  docker ps -a --format '{{.ID}} {{.Label "com.docker.compose.project"}}' 2>/dev/null | awk '$2 ~ /^harness-/ {print $1}'
+  dk ps -aq --filter label=harness=1
+  dk ps -a --format '{{.ID}} {{.Label "com.docker.compose.project"}}' | awk '$2 ~ /^harness-/ {print $1}'
 }
 harness_networks() {
-  docker network ls -q --filter label=harness=1 2>/dev/null
-  docker network ls --format '{{.ID}} {{.Label "com.docker.compose.project"}}' 2>/dev/null | awk '$2 ~ /^harness-/ {print $1}'
+  dk network ls -q --filter label=harness=1
+  dk network ls --format '{{.ID}} {{.Label "com.docker.compose.project"}}' | awk '$2 ~ /^harness-/ {print $1}'
 }
 harness_volumes() {
-  docker volume ls -q --filter label=harness=1 2>/dev/null
-  docker volume ls --format '{{.Name}} {{.Label "com.docker.compose.project"}}' 2>/dev/null | awk '$2 ~ /^harness-/ {print $1}'
+  dk volume ls -q --filter label=harness=1
+  dk volume ls --format '{{.Name}} {{.Label "com.docker.compose.project"}}' | awk '$2 ~ /^harness-/ {print $1}'
 }
-harness_images() { docker images -q --filter label=harness=1 2>/dev/null; }
+harness_images() { dk images -q --filter label=harness=1; }
 
 cmd_doctor() {
   local deep=0 arg tool v
@@ -612,13 +644,17 @@ cmd_doctor() {
 
   if command -v docker >/dev/null 2>&1; then
     section "Docker"
-    if docker info >/dev/null 2>&1; then
+    local dstate=0
+    docker_state || dstate=$?
+    if [ "$dstate" -eq 0 ]; then
       ok "$(t 'демон запущен' 'the daemon is running')"
       local left
       left="$( { harness_containers; harness_networks; harness_volumes; } | sort -u | grep -c . )"
       if [ "$left" -gt 0 ]; then
         warn "$(t "от прошлых запусков остались ресурсы harness ($left): bin/harness docker-clean" "harness resources are left from earlier runs ($left): bin/harness docker-clean")"
       fi
+    elif [ "$dstate" -eq 2 ]; then
+      warn "$(t "Docker не отвечает: команда docker не завершилась за ${HARNESS_DOCKER_TIMEOUT:-10} с — перезапусти Docker Desktop" "Docker does not respond: a docker command did not finish within ${HARNESS_DOCKER_TIMEOUT:-10} s — restart Docker Desktop")"
     else
       ok "$(t 'демон остановлен (запуск при необходимости: bin/harness docker-up)' 'the daemon is stopped (start it when needed: bin/harness docker-up)')"
     fi
@@ -1025,7 +1061,10 @@ cmd_check_commits() {
 # --- docker -------------------------------------------------------------------
 
 cmd_docker_up() {
-  docker info >/dev/null 2>&1 && { say "демон Docker уже запущен" "the Docker daemon is already running"; return 0; }
+  local st=0
+  docker_state || st=$?
+  [ "$st" -eq 0 ] && { say "демон Docker уже запущен" "the Docker daemon is already running"; return 0; }
+  [ "$st" -eq 2 ] && { docker_hung_msg; return 1; }
   case "$(uname -s)" in
     Darwin) open -ga Docker ;;
     Linux)  systemctl --user start docker-desktop 2>/dev/null || sudo -n systemctl start docker ;;
@@ -1033,7 +1072,7 @@ cmd_docker_up() {
   esac
   local i=0
   while [ "$i" -lt 60 ]; do
-    docker info >/dev/null 2>&1 && { say "демон Docker запущен" "the Docker daemon is running"; return 0; }
+    dk -t 10 info >/dev/null && { say "демон Docker запущен" "the Docker daemon is running"; return 0; }
     sleep 2; i=$((i + 1))
   done
   err "демон Docker не поднялся за 120 секунд" "the Docker daemon did not start within 120 seconds"
@@ -1041,7 +1080,10 @@ cmd_docker_up() {
 }
 
 cmd_docker_check() {
-  docker info >/dev/null 2>&1 || { say "демон Docker остановлен — ресурсов нет" "the Docker daemon is stopped — no resources"; return 0; }
+  local st=0
+  docker_state || st=$?
+  [ "$st" -eq 2 ] && { docker_hung_msg; return 1; }
+  [ "$st" -eq 0 ] || { say "демон Docker остановлен — ресурсов нет" "the Docker daemon is stopped — no resources"; return 0; }
   local c n v i
   c="$(harness_containers | sort -u | grep -c .)"
   n="$(harness_networks | sort -u | grep -c .)"
@@ -1052,14 +1094,17 @@ cmd_docker_check() {
 }
 
 cmd_docker_clean() {
-  docker info >/dev/null 2>&1 || { say "демон Docker остановлен — убирать нечего" "the Docker daemon is stopped — nothing to clean"; return 0; }
+  local st=0
+  docker_state || st=$?
+  [ "$st" -eq 2 ] && { docker_hung_msg; return 1; }
+  [ "$st" -eq 0 ] || { say "демон Docker остановлен — убирать нечего" "the Docker daemon is stopped — nothing to clean"; return 0; }
   local ids
   # shellcheck disable=SC2086  # ids are separate words on purpose
   {
-    ids="$(harness_containers | sort -u)"; [ -z "$ids" ] || docker rm -f -v $ids >/dev/null
-    ids="$(harness_networks | sort -u)";   [ -z "$ids" ] || docker network rm $ids >/dev/null
-    ids="$(harness_volumes | sort -u)";    [ -z "$ids" ] || docker volume rm -f $ids >/dev/null
-    ids="$(harness_images | sort -u)";     [ -z "$ids" ] || docker rmi -f $ids >/dev/null
+    ids="$(harness_containers | sort -u)"; [ -z "$ids" ] || dk -t 120 rm -f -v $ids >/dev/null
+    ids="$(harness_networks | sort -u)";   [ -z "$ids" ] || dk -t 120 network rm $ids >/dev/null
+    ids="$(harness_volumes | sort -u)";    [ -z "$ids" ] || dk -t 120 volume rm -f $ids >/dev/null
+    ids="$(harness_images | sort -u)";     [ -z "$ids" ] || dk -t 120 rmi -f $ids >/dev/null
   }
   cmd_docker_check
 }
@@ -1118,8 +1163,28 @@ cmd_selfcheck() {
   section "$(t 'Тексты запросов и релизов' 'Texts of requests and releases')"
   selfcheck_texts
 
+  section "Docker"
+  selfcheck_docker_hang
+
   say "Итог: ошибок $ERRORS" "Result: errors $ERRORS"
   [ "$ERRORS" -eq 0 ]
+}
+
+# A daemon that answers info but hangs on ps: docker-check reports it and returns instead of waiting.
+selfcheck_docker_hang() {
+  local tmp start rc out
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/harness-docker.XXXXXX")" || { fail "mktemp"; return; }
+  printf '#!/bin/sh\ncase "$1" in info) exit 0 ;; *) exec sleep 30 ;; esac\n' > "$tmp/docker"
+  chmod +x "$tmp/docker"
+  start="$(date +%s)"
+  out="$(PATH="$tmp:$PATH" HARNESS_DOCKER_TIMEOUT=1 "$ROOT/bin/harness" docker-check 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ] && [ $(( $(date +%s) - start )) -lt 10 ] && printf '%s' "$out" | grep -q 'Docker'; then
+    ok "$(t 'зависший docker ps не вешает harness: docker-check отвечает за секунды' 'a hanging docker ps does not hang harness: docker-check answers within seconds')"
+  else
+    fail "$(t "зависший docker ps: код $rc, $(( $(date +%s) - start )) с" "hanging docker ps: code $rc, $(( $(date +%s) - start )) s")"
+  fi
+  pkill -f "$tmp/docker" 2>/dev/null
+  rm -rf "$tmp"
 }
 
 # The Bash guard reads the text files of gh and of the GitLab commands of harness and refuses AI attribution.

@@ -2,6 +2,12 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [semver](https://semver.org/lang/ru/). English: [CHANGELOG.en.md](CHANGELOG.en.md).
 
+## [1.9.4] — 2026-10-16
+
+### Исправлено
+
+- Хук старта сессии больше не висит, когда Docker отвечает на `docker info`, но не завершает `docker ps`. Все вызовы Docker в `doctor`, `docker-check`, `docker-clean` и `docker-up` идут с ограничением по времени (10 с, `HARNESS_DOCKER_TIMEOUT`); зависший демон даёт замечание «Docker не отвечает — перезапусти Docker Desktop». Раньше сессия стартовала без контекста harness, пока хук не обрывался по таймауту. Проверка — в `bin/harness selfcheck`.
+
 ## [1.9.3] — 2026-10-16
 
 ### Изменено

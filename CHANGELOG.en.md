@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.9.4] — 2026-10-16
+
+### Fixed
+
+- The session start hook no longer hangs when Docker answers `docker info` but never finishes `docker ps`. Every Docker call in `doctor`, `docker-check`, `docker-clean` and `docker-up` has a time limit (10 s, `HARNESS_DOCKER_TIMEOUT`); a hung daemon gives the remark "Docker does not respond — restart Docker Desktop". Before, the session started without the harness context until the hook timed out. The check is in `bin/harness selfcheck`.
+
 ## [1.9.3] — 2026-10-16
 
 ### Changed
