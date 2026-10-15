@@ -2,6 +2,7 @@
 
 - Tokens live only in environment variables: `PLANE_TOKEN`, `N8N_TOKEN`, `GITGUARDIAN_TOKEN`, `MAILCOW_TOKEN`, `TW_TOKEN`, `GITLAB_TOKEN` — for the integrations enabled in `harness.json`. Access to Yandex Cloud is through the `yc` profile, with no token in the environment. How to use them is in `.claude/integrations/`.
 - Never print token values: no `echo $TOKEN`, `env`, `printenv`, `set -x` near them. Check only presence (`[ -n "$PLANE_TOKEN" ]`).
+- Pass a secret to a command only through a file or stdin (`--netrc-file`, `-K`, `--password-file`, `< file`), never as an argument like `--password=$(cat …)`: an argument shows in `ps`, and a program that does not know the option prints it together with the value. Check that a password-protected target is reachable by what the monitoring system itself reports, not by a manual request.
 - Do not write secrets into files, commits, messages, logs and request bodies to third-party services. A token is sent only to its own service.
 - If you find a secret in code or history, stop and tell the owner; do not commit and do not "fix" it silently.
 - If a token or access is missing, say so directly and continue the part of the work that does not need it. Do not look for workarounds or other people's credentials.

@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.8.0] — 2026-10-15
+
+### Added
+
+- Secrets rule: a secret reaches a command only through a file or stdin, never as an argument like `--password=$(cat …)`. An argument shows in `ps`, and a program that does not know the option (busybox `wget`) prints it together with the value — that is how a password ended up in a session log and had to be rotated. A password-protected target is checked through what monitoring reports, not by a manual request. The rule is in `rules/secrets.md`.
+
 ## [1.7.11] — 2026-10-15
 
 ### Fixed
