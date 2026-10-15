@@ -2,6 +2,16 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [semver](https://semver.org/lang/ru/). English: [CHANGELOG.en.md](CHANGELOG.en.md).
 
+## [1.11.0] — 2026-10-16
+
+### Добавлено
+
+- `bin/harness secrets` — токены включённых интеграций из хранилища Bitwarden или совместимого сервера: владелец выполняет `eval "$(bin/harness secrets)"` перед запуском claude, и токены попадают в окружение без записи на диск и без вывода в терминал. Имя записи в папке хранилища совпадает с именем переменной; `secrets.extra` в `harness.json` добавляет свои. Раньше токены на каждом устройстве вводились вручную. Описание — в `integrations/bitwarden.md`.
+- `bin/harness secrets --check` и раздел `doctor` «Хранилище секретов»: установлен ли `bw`, выполнен ли вход, на тот ли сервер, каких токенов нет в окружении — только имена.
+- Хук не выдаёт агенту значения из хранилища: `bin/harness secrets` без `--check`, `bw get`, `bw list items`, `bw unlock`, `bw export` отклоняются. Правило — в `rules/secrets.md`; проверки — в `bin/harness selfcheck`.
+- `HARNESS_CONF` — путь к `harness.json` для проверок `selfcheck`.
+- Пополнение реестра этой установки: новый репозиторий.
+
 ## [1.10.0] — 2026-10-16
 
 ### Изменено

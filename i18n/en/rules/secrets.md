@@ -1,6 +1,7 @@
 # Secrets and access
 
 - Tokens live only in environment variables: `PLANE_TOKEN`, `N8N_TOKEN`, `GITGUARDIAN_TOKEN`, `MAILCOW_TOKEN`, `TW_TOKEN`, `GITLAB_TOKEN` — for the integrations enabled in `harness.json`. Access to Yandex Cloud is through the `yc` profile, with no token in the environment. How to use them is in `.claude/integrations/`.
+- If `harness.json` has `secrets`, the tokens are kept in the owner's vault and the owner brings them into the session: `eval "$(bin/harness secrets)"` before starting claude (`.claude/integrations/bitwarden.md`). Values from the vault are not given to the agent; the check is `bin/harness secrets --check` (names only). Do not keep or suggest tokens in shell profiles or other files.
 - Never print token values: no `echo $TOKEN`, `env`, `printenv`, `set -x` near them. Check only presence (`[ -n "$PLANE_TOKEN" ]`).
 - Pass a secret to a command only through a file or stdin (`--netrc-file`, `-K`, `--password-file`, `< file`), never as an argument like `--password=$(cat …)`: an argument shows in `ps`, and a program that does not know the option prints it together with the value. Check that a password-protected target is reachable by what the monitoring system itself reports, not by a manual request.
 - Do not write secrets into files, commits, messages, logs and request bodies to third-party services. A token is sent only to its own service.

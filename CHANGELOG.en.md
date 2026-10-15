@@ -2,6 +2,16 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.11.0] — 2026-10-16
+
+### Added
+
+- `bin/harness secrets` — the tokens of the enabled integrations from a Bitwarden (or compatible) vault: the owner runs `eval "$(bin/harness secrets)"` before starting claude, and the tokens reach the environment without being written to disk or printed to a terminal. The item name in the vault folder equals the variable name; `secrets.extra` in `harness.json` adds more. Before, the tokens were typed in by hand on every device. Described in `integrations/bitwarden.md`.
+- `bin/harness secrets --check` and the `doctor` section "Secret store": whether `bw` is installed, logged in, bound to the right server, which tokens the environment lacks — names only.
+- The hook gives no vault values to the agent: `bin/harness secrets` without `--check`, `bw get`, `bw list items`, `bw unlock`, `bw export` are refused. The rule is in `rules/secrets.md`; the checks are in `bin/harness selfcheck`.
+- `HARNESS_CONF` — the path to `harness.json` for the `selfcheck` checks.
+- Registry of this installation: a new repository.
+
 ## [1.10.0] — 2026-10-16
 
 ### Changed

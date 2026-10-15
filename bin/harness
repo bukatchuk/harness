@@ -5,7 +5,7 @@
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONF="$ROOT/harness.json"
+CONF="${HARNESS_CONF:-$ROOT/harness.json}"
 REGISTRY="$ROOT/registry/repos.json"
 SERVERS="$ROOT/registry/servers.json"
 SERVICES="$ROOT/registry/services.json"
@@ -106,6 +106,9 @@ GitLab (интеграция gitlab)
   release-create <путь> <тег> --title <заголовок> --notes-file <файл>
                            релиз на существующий тег
 
+Секреты (хранилище Bitwarden или совместимый сервер)
+  secrets [--check]        токены включённых интеграций для eval "$(bin/harness secrets)"; --check — только имена
+
 Plane (интеграция plane)
   task create|state|comment|link|show|list …
                            задачи: создать, сменить состояние, комментарий, ссылка, показать, список
@@ -160,6 +163,9 @@ GitLab (the gitlab integration)
                            the pipeline and whether the request can be merged
   release-create <path> <tag> --title <title> --notes-file <file>
                            a release for an existing tag
+
+Secrets (a Bitwarden or compatible vault)
+  secrets [--check]        tokens of the enabled integrations for eval "$(bin/harness secrets)"; --check — names only
 
 Plane (the plane integration)
   task create|state|comment|link|show|list …
@@ -650,6 +656,26 @@ cmd_doctor() {
     if yc config profile list 2>/dev/null | grep -q ' ACTIVE$'; then ok "$(t 'профиль yc' 'yc profile')"; else warn "$(t 'нет активного профиля yc (вход: yc init)' 'no active yc profile (log in: yc init)')"; fi
   fi
   [ "$any" -eq 1 ] || ok "$(t 'не подключены (ключ integrations в harness.json)' 'none enabled (the integrations key in harness.json)')"
+
+  if [ -n "$(conf '.secrets.provider')" ]; then
+    section "$(t 'Хранилище секретов (только имена, значения не читаются)' 'Secret store (names only, values are not read)')"
+    if ! command -v bw >/dev/null 2>&1; then
+      warn "$(t 'bw не установлен: brew install bitwarden-cli (см. .claude/integrations/bitwarden.md)' 'bw is not installed: brew install bitwarden-cli (see .claude/integrations/bitwarden.md)')"
+    else
+      local bst bsrv bwant v absent=""
+      bst="$(bw_status | sed -n 1p)"; bsrv="$(bw_status | sed -n 2p)"; bwant="$(conf '.secrets.server')"
+      if [ -n "$bwant" ] && [ "${bsrv%/}" != "${bwant%/}" ]; then
+        warn "$(t "bw настроен на ${bsrv:-облако Bitwarden}, а нужно $bwant: bw config server $bwant" "bw points to ${bsrv:-the Bitwarden cloud}, expected $bwant: bw config server $bwant")"
+      fi
+      case "$bst" in
+        unlocked) ok "$(t 'bw: вход выполнен, хранилище разблокировано' 'bw: logged in, the vault is unlocked')" ;;
+        locked)   ok "$(t 'bw: вход выполнен, хранилище заблокировано' 'bw: logged in, the vault is locked')" ;;
+        *)        warn "$(t 'bw: вход не выполнен — bw login' 'bw: not logged in — bw login')" ;;
+      esac
+      for v in $(secret_vars); do [ -n "${!v:-}" ] || absent="$absent $v"; done
+      [ -z "$absent" ] || warn "$(t "в окружении нет:$absent — владелец приносит токены в сессию: eval \"\$(bin/harness secrets)\" перед claude" "missing from the environment:$absent — the owner brings tokens into the session: eval \"\$(bin/harness secrets)\" before claude")"
+    fi
+  fi
 
   section "Git"
   if [ "$(git -C "$ROOT" config --local core.hooksPath 2>/dev/null)" = ".githooks" ]; then
@@ -1223,10 +1249,51 @@ cmd_selfcheck() {
 
   section "Docker"
   selfcheck_docker_hang
+
+  section "$(t 'Секреты' 'Secrets')"
+  selfcheck_secrets
   selfcheck_docker_clean
 
   say "Итог: ошибок $ERRORS" "Result: errors $ERRORS"
   [ "$ERRORS" -eq 0 ]
+}
+
+# A fake bw with a folder of two tokens: secrets prints export lines that eval back to the values, reports a
+# missing item, and the Bash guard refuses to hand values to the agent.
+selfcheck_secrets() {
+  local tmp out rc
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/harness-secrets.XXXXXX")" || { fail "mktemp"; return; }
+  printf '%s\n' '{"integrations":{"plane":{"url":"https://p.invalid"},"gitlab":{"url":"https://g.invalid"}},' \
+    '"secrets":{"provider":"bitwarden","server":"https://key.invalid","folder":"harness","extra":["EXTRA_TOKEN"]}}' > "$tmp/h.json"
+  cat > "$tmp/bw" <<'BW'
+#!/bin/sh
+case "$1 $2" in
+  "status "*) echo '{"status":"unlocked","serverUrl":"https://key.invalid"}' ;;
+  "sync "*) exit 0 ;;
+  "list folders") echo '[{"id":"f1","name":"harness"}]' ;;
+  "list items") echo '[{"name":"PLANE_TOKEN","login":{"password":"p a$s'"'"'1"}},{"name":"GITLAB_TOKEN","notes":"g-2"},{"name":"OTHER","login":{"password":"x"}}]' ;;
+  *) exit 1 ;;
+esac
+BW
+  chmod +x "$tmp/bw"
+  out="$(PATH="$tmp:$PATH" HARNESS_CONF="$tmp/h.json" "$ROOT/bin/harness" secrets 2>/dev/null)"; rc=$?
+  if [ "$rc" -eq 1 ] && ( eval "$out"; [ "$PLANE_TOKEN" = "p a\$s'1" ] && [ "$GITLAB_TOKEN" = g-2 ] ) \
+     && ! printf '%s' "$out" | grep -q OTHER; then
+    ok "$(t 'secrets выдаёт export только нужных токенов, значения переживают eval, нехватка — код 1' 'secrets prints export lines only for the needed tokens, values survive eval, a missing one gives code 1')"
+  else
+    fail "$(t "secrets: код $rc, вывод не тот" "secrets: code $rc, wrong output")"
+  fi
+  sc_guard() {
+    jq -n --arg d "$tmp" --arg c "$3" '{session_id: "T", cwd: $d, tool_input: {command: $c}}' \
+      | HARNESS_STATE_DIR="$tmp/state" "$ROOT/bin/harness" hook guard-bash >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" -eq "$1" ]; then ok "$2"; else fail "$2 ($(t "код $rc вместо $1" "code $rc instead of $1"))"; fi
+  }
+  sc_guard 2 "$(t 'агенту не выдаются значения: bin/harness secrets' 'values are refused to the agent: bin/harness secrets')" 'bin/harness secrets'
+  sc_guard 2 "$(t 'агенту не выдаются значения: bw get password' 'values are refused to the agent: bw get password')" 'bw get password PLANE_TOKEN'
+  sc_guard 0 "$(t 'проверка имён bin/harness secrets --check разрешена' 'the names check bin/harness secrets --check is allowed')" 'bin/harness secrets --check'
+  unset -f sc_guard
+  rm -rf "$tmp"
 }
 
 # A daemon that answers info but hangs on ps: docker-check reports it and returns instead of waiting.
@@ -1743,6 +1810,73 @@ cmd_release_create() {
     | gl_api "/projects/$(gl_project "$path")/releases" -X POST -d @-)"
   printf '%s' "$res" | jq -e '.tag_name' >/dev/null 2>&1 || { gl_fail "$res"; return 1; }
   printf '%s' "$res" | jq -r '._links.self'
+}
+
+# --- secrets ------------------------------------------------------------------
+
+# Token variables of the enabled integrations, one per line, plus secrets.extra from harness.json.
+secret_vars() {
+  local i v
+  for i in plane:PLANE_TOKEN n8n:N8N_TOKEN gitguardian:GITGUARDIAN_TOKEN mailcow:MAILCOW_TOKEN gitlab:GITLAB_TOKEN timeweb:TW_TOKEN; do
+    integration_on "${i%%:*}" && echo "${i#*:}"
+  done
+  conf '.secrets.extra[]?' | while IFS= read -r v; do
+    printf '%s' "$v" | grep -Eq '^[A-Z][A-Z0-9_]*$' && echo "$v"
+  done
+}
+
+secrets_ready() {
+  [ "$(conf '.secrets.provider')" = bitwarden ] || { err "хранилище секретов не настроено: secrets.provider в harness.json (см. .claude/integrations/bitwarden.md)" "no secret store is configured: secrets.provider in harness.json (see .claude/integrations/bitwarden.md)"; return 1; }
+  command -v bw >/dev/null 2>&1 || { err "нужен Bitwarden CLI (bw): brew install bitwarden-cli" "Bitwarden CLI (bw) is required: brew install bitwarden-cli"; return 1; }
+  need_jq
+}
+
+# bw_status — status of the CLI: unauthenticated, locked or unlocked; the server it is bound to on line 2.
+bw_status() { bw status 2>/dev/null | jq -r '.status // "unknown", .serverUrl // ""'; }
+
+# secrets [--check] — tokens of the enabled integrations from the folder secrets.folder of a Bitwarden (or compatible) vault.
+# Without --check it prints «export NAME=value» lines for eval in the owner's shell, never to a terminal:
+#   eval "$(bin/harness secrets)"
+# --check prints only which names are present. Values never go anywhere else.
+cmd_secrets() {
+  local check=0 st server want folder fid items vars name val missing="" found=0
+  case "${1:-}" in --check) check=1 ;; "") ;; *) err "использование: bin/harness secrets [--check]" "usage: bin/harness secrets [--check]"; return 1 ;; esac
+  secrets_ready || return 1
+  if [ "$check" -eq 0 ] && [ -t 1 ]; then
+    err "токены не выводятся в терминал: eval \"\$(bin/harness secrets)\"" "tokens are not printed to a terminal: eval \"\$(bin/harness secrets)\""
+    return 1
+  fi
+  st="$(bw_status | sed -n 1p)"; server="$(bw_status | sed -n 2p)"
+  want="$(conf '.secrets.server')"
+  if [ -n "$want" ] && [ "${server%/}" != "${want%/}" ]; then
+    err "bw настроен на ${server:-облако Bitwarden}, а нужно $want: bw logout; bw config server $want; bw login" \
+        "bw points to ${server:-the Bitwarden cloud}, expected $want: bw logout; bw config server $want; bw login"
+    return 1
+  fi
+  case "$st" in
+    unlocked) ;;
+    locked) err "хранилище заблокировано: export BW_SESSION=\"\$(bw unlock --raw)\" и повтори" "the vault is locked: export BW_SESSION=\"\$(bw unlock --raw)\" and retry"; return 1 ;;
+    *) err "bw не выполнил вход: bw config server ${want:-<адрес>}; bw login" "bw is not logged in: bw config server ${want:-<url>}; bw login"; return 1 ;;
+  esac
+  # Fresh data when the server answers; offline the local copy is used.
+  bw sync >/dev/null 2>&1 || err "сервер хранилища недоступен — токены из локальной копии" "the vault server is unreachable — tokens come from the local copy"
+  folder="$(conf '.secrets.folder')"; folder="${folder:-harness}"
+  fid="$(bw list folders 2>/dev/null | jq -r --arg f "$folder" '.[] | select(.name == $f) | .id' | head -1)"
+  [ -n "$fid" ] || { err "в хранилище нет папки «$folder»" "the vault has no folder \"$folder\""; return 1; }
+  items="$(bw list items --folderid "$fid" 2>/dev/null)" || { err "bw list items не выполнился" "bw list items failed"; return 1; }
+  vars="$(secret_vars)"
+  for name in $vars; do
+    # The value — the password of a login item or the notes of a secure note named exactly as the variable.
+    val="$(printf '%s' "$items" | jq -r --arg n "$name" '[.[] | select(.name == $n) | (.login.password // .notes // empty)] | .[0] // empty')"
+    if [ -z "$val" ]; then missing="$missing $name"; continue; fi
+    found=$((found + 1))
+    if [ "$check" -eq 1 ]; then ok "$name"; else printf 'export %s=%q\n' "$name" "$val"; fi
+  done
+  if [ -n "$missing" ]; then
+    err "в папке «$folder» нет записей:$missing" "the folder \"$folder\" has no items:$missing"
+    return 1
+  fi
+  [ "$check" -eq 0 ] || say "все токены на месте: $found" "all tokens are present: $found"
 }
 
 # --- Plane --------------------------------------------------------------------
@@ -2456,6 +2590,15 @@ hook_guard_bash() {
 
   guard_repos "$(printf '%s' "$input" | jq -r '.session_id // "default"')" "$cmd" "$cwd"
 
+  # Token values reach the session only through the owner's shell: the agent may check names, not read values.
+  if { printf '%s' "$cmd" | grep -Eq 'harness[^|;&]*[[:space:]]secrets([[:space:]]|$|[;&|)])' \
+       && ! printf '%s' "$cmd" | grep -Eq 'harness[^|;&]*[[:space:]]secrets[[:space:]]+--check'; } \
+     || printf '%s' "$cmd" | grep -Eq '(^|[;&|(`[:space:]])bw[[:space:]]+(get|export|serve|unlock|list[[:space:]]+(items|send))([[:space:]]|$)'; then
+    err "harness: значения токенов агенту не выдаются. Проверка имён — bin/harness secrets --check; токены в сессию приносит владелец: eval \"\$(bin/harness secrets)\" перед claude (см. .claude/rules/secrets.md)." \
+        "harness: token values are not given to the agent. Names check — bin/harness secrets --check; the owner brings tokens into the session: eval \"\$(bin/harness secrets)\" before claude (see .claude/rules/secrets.md)."
+    exit 2
+  fi
+
   if printf '%s' "$cmd" | grep -Eq 'git[^|;&]* config[^|;&]* user\.(name|email)[[:space:]]+[^|;&[:space:]]|-c[[:space:]]+user\.(name|email)=|GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL)=|--author[= ]'; then
     err "harness: автор коммитов берётся из harness.json и закреплён командой bin/harness init — менять его в команде нельзя (см. .claude/rules/git.md)." \
         "harness: the commit author comes from harness.json and is pinned by bin/harness init — it cannot be changed in a command (see .claude/rules/git.md)."
@@ -2518,6 +2661,7 @@ case "${1:-}" in
   mr-status)       shift; cmd_mr_status "$@" ;;
   release-create)  shift; cmd_release_create "$@" ;;
   task)            shift; cmd_task "$@" ;;
+  secrets)         shift; cmd_secrets "$@" ;;
   tasks)           shift; cmd_tasks "$@" ;;
   release-build)   shift; cmd_release_build "$@" ;;
   release-publish) shift; cmd_release_publish "$@" ;;
