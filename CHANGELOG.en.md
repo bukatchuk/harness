@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.12.4] — 2026-10-17
+
+### Changed
+
+- Settings of this installation: a word matching an integration name is allowed in the public build check by the owner's decision.
+
 ## [1.12.3] — 2026-10-17
 
 ### Changed
