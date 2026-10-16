@@ -2,6 +2,16 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.11.1] — 2026-10-16
+
+### Fixed
+
+- The hook refused any command where the word "secrets" followed "harness" (for example `git -C …/harness log --grep secrets` or a description text). Now only a call of the `harness secrets` command without `--check` is refused. The checks are in `bin/harness selfcheck`.
+
+### Changed
+
+- Registry and settings of this installation: a link between a new service and a server, the secret store connected.
+
 ## [1.11.0] — 2026-10-16
 
 ### Added

@@ -2,6 +2,16 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [semver](https://semver.org/lang/ru/). English: [CHANGELOG.en.md](CHANGELOG.en.md).
 
+## [1.11.1] — 2026-10-16
+
+### Исправлено
+
+- Хук отклонял любую команду, где после «harness» встречалось слово «secrets» (например, `git -C …/harness log --grep secrets` или текст описания). Теперь запрет — только на вызов команды `harness secrets` без `--check`. Проверки — в `bin/harness selfcheck`.
+
+### Изменено
+
+- Пополнение реестра и настроек этой установки: связь нового сервиса с сервером, хранилище секретов подключено.
+
 ## [1.11.0] — 2026-10-16
 
 ### Добавлено

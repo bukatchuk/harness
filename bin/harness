@@ -1292,6 +1292,8 @@ BW
   sc_guard 2 "$(t 'агенту не выдаются значения: bin/harness secrets' 'values are refused to the agent: bin/harness secrets')" 'bin/harness secrets'
   sc_guard 2 "$(t 'агенту не выдаются значения: bw get password' 'values are refused to the agent: bw get password')" 'bw get password PLANE_TOKEN'
   sc_guard 0 "$(t 'проверка имён bin/harness secrets --check разрешена' 'the names check bin/harness secrets --check is allowed')" 'bin/harness secrets --check'
+  sc_guard 0 "$(t 'слово secrets дальше в команде — не вызов' 'the word secrets further in a command is not a call')" 'git -C /x/harness log --grep secrets'
+  sc_guard 2 "$(t 'вызов по полному пути отклонён' 'a call by full path is refused')" 'x=$(/opt/harness/bin/harness secrets)'
   unset -f sc_guard
   rm -rf "$tmp"
 }
@@ -2591,8 +2593,9 @@ hook_guard_bash() {
   guard_repos "$(printf '%s' "$input" | jq -r '.session_id // "default"')" "$cmd" "$cwd"
 
   # Token values reach the session only through the owner's shell: the agent may check names, not read values.
-  if { printf '%s' "$cmd" | grep -Eq 'harness[^|;&]*[[:space:]]secrets([[:space:]]|$|[;&|)])' \
-       && ! printf '%s' "$cmd" | grep -Eq 'harness[^|;&]*[[:space:]]secrets[[:space:]]+--check'; } \
+  # The command itself — «harness secrets» right after the program name, not a word «secrets» further on.
+  if { printf '%s' "$cmd" | grep -Eq '(^|[;&|(`[:space:]])([^;&|(`[:space:]]*/)?harness[[:space:]]+secrets([[:space:]]|$|[;&|)`])' \
+       && ! printf '%s' "$cmd" | grep -Eq '(^|[;&|(`[:space:]])([^;&|(`[:space:]]*/)?harness[[:space:]]+secrets[[:space:]]+--check'; } \
      || printf '%s' "$cmd" | grep -Eq '(^|[;&|(`[:space:]])bw[[:space:]]+(get|export|serve|unlock|list[[:space:]]+(items|send))([[:space:]]|$)'; then
     err "harness: значения токенов агенту не выдаются. Проверка имён — bin/harness secrets --check; токены в сессию приносит владелец: eval \"\$(bin/harness secrets)\" перед claude (см. .claude/rules/secrets.md)." \
         "harness: token values are not given to the agent. Names check — bin/harness secrets --check; the owner brings tokens into the session: eval \"\$(bin/harness secrets)\" before claude (see .claude/rules/secrets.md)."
