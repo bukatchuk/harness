@@ -2,6 +2,12 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [semver](https://semver.org/lang/ru/). English: [CHANGELOG.en.md](CHANGELOG.en.md).
 
+## [1.12.2] — 2026-10-17
+
+### Удалено
+
+- Пополнение реестра этой установки: удалённый сервер убран из реестра.
+
 ## [1.12.1] — 2026-10-16
 
 ### Изменено
