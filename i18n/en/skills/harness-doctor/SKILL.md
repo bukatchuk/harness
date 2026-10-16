@@ -5,9 +5,9 @@ description: Full check of the harness environment — utilities, tokens, real a
 
 Check the environment.
 
-1. Run `bin/harness doctor --deep`. The script checks only the presence of tokens and response codes; it does not print token values — and you do not print them either.
-2. Group the result for the owner: what works (one line), what requires action.
-3. For each `FAIL` and `warn`, give a concrete next step:
+1. Run `bin/harness doctor --deep --md` without `| tail` or other filters: the `⏳ …` lines show the owner what is being checked while the command runs. The script checks only the presence of tokens and response codes; it does not print token values — and you do not print them either.
+2. Show the owner the table from the output in full, as is, with the «Result» line below it; do not copy the `⏳ …` lines into the reply. The owner does not see tool output — the table must be in your reply.
+3. Below the table, for each ❌ and ⚠️, give a concrete next step:
    - a utility is not installed — the install command for this OS (on macOS `brew install …`, for `ggshield` `pipx install ggshield`);
    - the owner is not set or the rules are not deployed — `bin/harness init`;
    - a token is not set — which variable to put it in and where it is issued (see `.claude/integrations/<service>.md`);

@@ -69,7 +69,7 @@ usage() {
   init [--name И --email П --lang ru|en --yes]   первичная настройка: владелец, язык, git-хуки
   lang [ru|en]             показать или сменить язык правил, skills и сообщений
   version                  версия harness и наличие обновления в origin
-  doctor [--deep]          проверка окружения; --deep — с реальными запросами к API
+  doctor [--deep] [--md]   проверка окружения; --deep — с реальными запросами к API, --md — таблицей с эмодзи
   selfcheck                проверка целостности самого harness (для CI и перед релизом)
 
 Реестр
@@ -126,7 +126,7 @@ Setup
   init [--name N --email E --lang ru|en --yes]   first-time setup: owner, language, git hooks
   lang [ru|en]             show or switch the language of rules, skills and messages
   version                  harness version and whether origin has an update
-  doctor [--deep]          environment check; --deep makes real API requests
+  doctor [--deep] [--md]   environment check; --deep makes real API requests, --md prints an emoji table
   selfcheck                integrity check of harness itself (for CI and before a release)
 
 Registry
@@ -498,10 +498,61 @@ cmd_init() {
 ERRORS=0
 WARNINGS=0
 QUIET=0
-ok()   { [ "$QUIET" -eq 1 ] || echo "  ok    $*"; }
-warn() { echo "  warn  $*"; WARNINGS=$((WARNINGS + 1)); }
-fail() { echo "  FAIL  $*"; ERRORS=$((ERRORS + 1)); }
-section() { [ "$QUIET" -eq 1 ] || echo "$*"; }
+FMT=text   # text | md — a markdown table with emoji, for showing the result to the owner
+RAW=0      # 1 inside a background check: results go out as «status<TAB>text» for check_replay
+MD_SECTION=""
+PROGRESS=0
+ok()   { report ok "$*"; }
+warn() { report warn "$*"; }
+fail() { report fail "$*"; }
+report() {
+  local s="$1" icon; shift
+  case "$s" in warn) WARNINGS=$((WARNINGS + 1)) ;; fail) ERRORS=$((ERRORS + 1)) ;; esac
+  if [ "$RAW" -eq 1 ]; then printf '%s\t%s\n' "$s" "$*"; return; fi
+  [ "$s" = ok ] && [ "$QUIET" -eq 1 ] && return
+  progress_clear
+  if [ "$FMT" = md ]; then
+    case "$s" in ok) icon="✅" ;; warn) icon="⚠️" ;; *) icon="❌" ;; esac
+    printf '| %s | %s | %s |\n' "$MD_SECTION" "$icon" "${*//|/\\|}"
+    MD_SECTION=""
+  else
+    case "$s" in ok) echo "  ok    $*" ;; warn) echo "  warn  $*" ;; *) echo "  FAIL  $*" ;; esac
+  fi
+}
+section() {
+  [ "$QUIET" -eq 1 ] && return
+  progress_clear
+  if [ "$FMT" = md ]; then
+    MD_SECTION="**${*%% (*}**"   # without the parenthesised remark: the table column stays narrow
+  else
+    echo "$*"
+  fi
+}
+# progress <what> — what is being checked right now, to stderr: in a terminal one line that is overwritten,
+# otherwise a line per step (Claude Code shows the output while the command runs). Silent with --quiet.
+progress() {
+  [ "$QUIET" -eq 1 ] || [ "$RAW" -eq 1 ] && return
+  if [ -t 2 ]; then printf '\r\033[K⏳ %s…' "$*" >&2; PROGRESS=1; else printf '⏳ %s…\n' "$*" >&2; fi
+}
+progress_clear() { [ "$PROGRESS" -eq 0 ] || printf '\r\033[K' >&2; PROGRESS=0; }
+
+# Slow checks (network, SSH) run in the background from the start of doctor and are shown in a fixed order.
+CHECK_DIR=""; CHECK_IDS=(); CHECK_PIDS=(); CHECK_LABELS=()
+check_bg() {   # check_bg <label> <command…>
+  local id="${#CHECK_IDS[@]}" label="$1"; shift
+  ( RAW=1; "$@" ) > "$CHECK_DIR/$id" 2>/dev/null &
+  CHECK_IDS+=("$id"); CHECK_PIDS+=("$!"); CHECK_LABELS+=("$label")
+}
+check_replay() {   # check_replay <from> <to> — waits for background checks [from, to) and reports their results
+  local i s text
+  for ((i = $1; i < $2; i++)); do
+    kill -0 "${CHECK_PIDS[$i]}" 2>/dev/null && progress "${CHECK_LABELS[$i]}"
+    wait "${CHECK_PIDS[$i]}" 2>/dev/null
+    while IFS=$'\t' read -r s text; do
+      case "$s" in ok|warn|fail) report "$s" "$text" ;; esac
+    done < "$CHECK_DIR/${CHECK_IDS[$i]}"
+  done
+}
 
 # The token goes to curl through a file descriptor, not an argument: it is not visible in ps.
 http_check() {
@@ -579,14 +630,69 @@ harness_classified() {
   harness_resources | awk -v me="$(harness_session)" '{ print $1, $2, ($3 == "-" ? "none" : ($3 == me ? "own" : "other")), $4 }'
 }
 
+# doctor_deep_start — starts the real requests in the background; their results are shown later in the
+# «Access» and «Servers» sections. CHECK_ACCESS_END and CHECK_SSH_END mark where each section ends.
+doctor_deep_start() {
+  local url name host port user
+  check_bg "$(t 'origin harness' 'harness origin')" origin_check
+  url="$(conf '.integrations.plane.url')"
+  [ -n "$url" ] && [ -n "${PLANE_TOKEN:-}" ] && check_bg Plane http_check "Plane" "${url%/}/api/v1/users/me/" "X-API-Key: $PLANE_TOKEN"
+  url="$(conf '.integrations.n8n.url')"
+  [ -n "$url" ] && [ -n "${N8N_TOKEN:-}" ] && check_bg n8n http_check "n8n" "${url%/}/api/v1/workflows?limit=1" "X-N8N-API-KEY: $N8N_TOKEN"
+  url="$(conf '.integrations.gitlab.url')"
+  [ -n "$url" ] && [ -n "${GITLAB_TOKEN:-}" ] && check_bg GitLab http_check "GitLab" "${url%/}/api/v4/user" "PRIVATE-TOKEN: $GITLAB_TOKEN"
+  url="$(conf '.integrations.mailcow.url')"
+  [ -n "$url" ] && [ -n "${MAILCOW_TOKEN:-}" ] && check_bg mailcow http_check "mailcow" "${url%/}/api/v1/get/status/version" "X-API-Key: $MAILCOW_TOKEN"
+  integration_on timeweb && [ -n "${TW_TOKEN:-}" ] && check_bg "Timeweb Cloud" http_check "Timeweb Cloud" "https://api.timeweb.cloud/api/v1/account/status" "Authorization: Bearer $TW_TOKEN"
+  integration_on gitguardian && [ -n "${GITGUARDIAN_TOKEN:-}" ] && check_bg GitGuardian http_check "GitGuardian" "https://api.gitguardian.com/v1/health" "Authorization: Token $GITGUARDIAN_TOKEN"
+  integration_on yandex_cloud && command -v yc >/dev/null 2>&1 && check_bg "Yandex Cloud" yc_check
+  CHECK_ACCESS_END="${#CHECK_IDS[@]}"
+  if jq -e '.servers | type == "array"' "$SERVERS" >/dev/null 2>&1; then
+    while IFS=$'\t' read -r name host port user; do
+      [ -n "$name" ] && check_bg "SSH $name" check_server "$name" "$host" "$port" "$user"
+    done < <(jq -r '.servers[] | [.name, .host, (.port // 22 | tostring), .user] | @tsv' "$SERVERS")
+  fi
+  CHECK_SSH_END="${#CHECK_IDS[@]}"
+}
+
+origin_check() {
+  if git -C "$ROOT" ls-remote --exit-code origin HEAD >/dev/null 2>&1; then
+    ok "$(t 'origin harness доступен' 'harness origin is reachable')"
+  else
+    fail "$(t 'origin harness недоступен' 'harness origin is unreachable')"
+  fi
+}
+
+yc_check() {
+  yc config profile list 2>/dev/null | grep -q ' ACTIVE$' || return 0
+  if yc resource-manager cloud list --format json >/dev/null 2>&1; then
+    ok "Yandex Cloud: $(t 'доступ есть' 'access works')"
+  else
+    fail "Yandex Cloud: $(t 'запрос не прошёл (yc resource-manager cloud list); вход устарел — yc init' 'the request failed (yc resource-manager cloud list); the login expired — yc init')"
+  fi
+}
+
 cmd_doctor() {
   local deep=0 arg tool v
   for arg in "$@"; do
     case "$arg" in
       --deep)  deep=1 ;;
       --quiet) QUIET=1 ;;
+      --md)    FMT=md ;;
+      *) err "использование: bin/harness doctor [--deep] [--md]" "usage: bin/harness doctor [--deep] [--md]"; return 1 ;;
     esac
   done
+  [ "$QUIET" -eq 0 ] || FMT=text
+  if [ "$deep" -eq 1 ] && command -v jq >/dev/null 2>&1; then
+    CHECK_DIR="$(mktemp -d)"
+    # shellcheck disable=SC2064  # the path is fixed now on purpose
+    trap "rm -rf '$CHECK_DIR'" EXIT
+    doctor_deep_start
+  fi
+  if [ "$FMT" = md ]; then
+    t '| Раздел | | Проверка |' '| Section | | Check |'; echo
+    echo '|---|:-:|---|'
+  fi
 
   section "$(t 'Утилиты' 'Tools')"
   for tool in git jq curl; do
@@ -662,8 +768,9 @@ cmd_doctor() {
     if ! command -v bw >/dev/null 2>&1; then
       warn "$(t 'bw не установлен: brew install bitwarden-cli (см. .claude/integrations/bitwarden.md)' 'bw is not installed: brew install bitwarden-cli (see .claude/integrations/bitwarden.md)')"
     else
-      local bst bsrv bwant v absent=""
-      bst="$(bw_status | sed -n 1p)"; bsrv="$(bw_status | sed -n 2p)"; bwant="$(conf '.secrets.server')"
+      local bst bsrv bwant v absent="" bout
+      progress "$(t 'хранилище секретов: bw status' 'secret store: bw status')"
+      bout="$(bw_status)"; bst="$(sed -n 1p <<< "$bout")"; bsrv="$(sed -n 2p <<< "$bout")"; bwant="$(conf '.secrets.server')"
       if [ -n "$bwant" ] && [ "${bsrv%/}" != "${bwant%/}" ]; then
         warn "$(t "bw настроен на ${bsrv:-облако Bitwarden}, а нужно $bwant: bw config server $bwant" "bw points to ${bsrv:-the Bitwarden cloud}, expected $bwant: bw config server $bwant")"
       fi
@@ -690,6 +797,7 @@ cmd_doctor() {
   if command -v docker >/dev/null 2>&1; then
     section "Docker"
     local dstate=0
+    progress "$(t 'Docker: демон' 'Docker: the daemon')"
     docker_state || dstate=$?
     if [ "$dstate" -eq 0 ]; then
       ok "$(t 'демон запущен' 'the daemon is running')"
@@ -738,36 +846,23 @@ cmd_doctor() {
     fi
   fi
 
-  if [ "$deep" -eq 1 ]; then
+  if [ "$deep" -eq 1 ] && [ -n "$CHECK_DIR" ]; then
     section "$(t 'Доступы (реальные запросы)' 'Access (real requests)')"
-    if git -C "$ROOT" ls-remote --exit-code origin HEAD >/dev/null 2>&1; then
-      ok "$(t 'origin harness доступен' 'harness origin is reachable')"
-    else
-      fail "$(t 'origin harness недоступен' 'harness origin is unreachable')"
-    fi
-    local url
-    url="$(conf '.integrations.plane.url')"
-    [ -n "$url" ] && [ -n "${PLANE_TOKEN:-}" ] && http_check "Plane" "${url%/}/api/v1/users/me/" "X-API-Key: $PLANE_TOKEN"
-    url="$(conf '.integrations.n8n.url')"
-    [ -n "$url" ] && [ -n "${N8N_TOKEN:-}" ] && http_check "n8n" "${url%/}/api/v1/workflows?limit=1" "X-N8N-API-KEY: $N8N_TOKEN"
-    url="$(conf '.integrations.gitlab.url')"
-    [ -n "$url" ] && [ -n "${GITLAB_TOKEN:-}" ] && http_check "GitLab" "${url%/}/api/v4/user" "PRIVATE-TOKEN: $GITLAB_TOKEN"
-    url="$(conf '.integrations.mailcow.url')"
-    [ -n "$url" ] && [ -n "${MAILCOW_TOKEN:-}" ] && http_check "mailcow" "${url%/}/api/v1/get/status/version" "X-API-Key: $MAILCOW_TOKEN"
-    integration_on timeweb && [ -n "${TW_TOKEN:-}" ] && http_check "Timeweb Cloud" "https://api.timeweb.cloud/api/v1/account/status" "Authorization: Bearer $TW_TOKEN"
-    integration_on gitguardian && [ -n "${GITGUARDIAN_TOKEN:-}" ] && http_check "GitGuardian" "https://api.gitguardian.com/v1/health" "Authorization: Token $GITGUARDIAN_TOKEN"
-    if integration_on yandex_cloud && command -v yc >/dev/null 2>&1 && yc config profile list 2>/dev/null | grep -q ' ACTIVE$'; then
-      if yc resource-manager cloud list --format json >/dev/null 2>&1; then
-        ok "Yandex Cloud: $(t 'доступ есть' 'access works')"
-      else
-        fail "Yandex Cloud: $(t 'запрос не прошёл (yc resource-manager cloud list); вход устарел — yc init' 'the request failed (yc resource-manager cloud list); the login expired — yc init')"
-      fi
-    fi
+    check_replay 0 "$CHECK_ACCESS_END"
     section "$(t 'Серверы (SSH)' 'Servers (SSH)')"
-    check_servers ""
+    check_replay "$CHECK_ACCESS_END" "$CHECK_SSH_END"
   fi
+  progress_clear
 
-  if [ "$QUIET" -eq 0 ]; then
+  if [ "$QUIET" -eq 0 ] && [ "$FMT" = md ]; then
+    echo
+    if [ $((ERRORS + WARNINGS)) -eq 0 ]; then
+      say "**Итог:** ✅ всё в порядке" "**Result:** ✅ all good"
+    else
+      local mark="⚠️"; [ "$ERRORS" -eq 0 ] || mark="❌"
+      say "**Итог:** $mark ошибок $ERRORS · предупреждений $WARNINGS" "**Result:** $mark errors $ERRORS · warnings $WARNINGS"
+    fi
+  elif [ "$QUIET" -eq 0 ]; then
     say "Итог: ошибок $ERRORS, предупреждений $WARNINGS" "Result: errors $ERRORS, warnings $WARNINGS"
   fi
   [ "$ERRORS" -eq 0 ]
@@ -897,17 +992,21 @@ ssh_probe() {
   ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -p "$3" "$2@$1" true </dev/null >/dev/null 2>&1
 }
 
+check_server() {   # check_server <name> <host> <port> <user>
+  if ssh_probe "$2" "$4" "$3"; then
+    ok "$1: SSH $4@$2:$3"
+  else
+    fail "$1: $(t "нет входа по SSH на $4@$2:$3 (ключ, known_hosts или сеть)" "no SSH login to $4@$2:$3 (key, known_hosts or network)")"
+  fi
+}
+
 check_servers() {
   local only="$1" name host port user
   jq -e '.servers | type == "array"' "$SERVERS" >/dev/null 2>&1 || return 0
   while IFS=$'\t' read -r name host port user; do
     [ -n "$name" ] || continue
     [ -z "$only" ] || [ "$only" = "$name" ] || continue
-    if ssh_probe "$host" "$user" "$port"; then
-      ok "$name: SSH $user@$host:$port"
-    else
-      fail "$name: $(t "нет входа по SSH на $user@$host:$port (ключ, known_hosts или сеть)" "no SSH login to $user@$host:$port (key, known_hosts or network)")"
-    fi
+    check_server "$name" "$host" "$port" "$user"
   done < <(jq -r '.servers[] | [.name, .host, (.port // 22 | tostring), .user] | @tsv' "$SERVERS")
 }
 
@@ -1250,6 +1349,9 @@ cmd_selfcheck() {
   section "Docker"
   selfcheck_docker_hang
 
+  section "doctor"
+  selfcheck_doctor
+
   section "$(t 'Секреты' 'Secrets')"
   selfcheck_secrets
   selfcheck_docker_clean
@@ -1351,6 +1453,33 @@ STUB
     fail "$(t "docker-clean --all удалил не то: $(printf '%s' "$got" | tr '\n' ';')" "docker-clean --all removed the wrong set: $(printf '%s' "$got" | tr '\n' ';')")"
   fi
   rm -rf "$tmp"
+}
+
+# doctor --md: a table row per result with «|» escaped; background checks are shown in the order they were started,
+# not in the order they finish, and their results count as errors and warnings of the run.
+selfcheck_doctor() {
+  local got want
+  got="$(FMT=md; QUIET=0; section 'Раздел (пояснение)'; report ok 'a|b'; report warn 'c')"
+  want="$(printf '%s\n' '| **Раздел** | ✅ | a\|b |' '|  | ⚠️ | c |')"
+  if [ "$got" = "$want" ]; then
+    ok "$(t 'doctor --md: строка таблицы на результат, раздел без пояснения в скобках' 'doctor --md: a table row per result, the section without the remark in brackets')"
+  else
+    fail "$(t "doctor --md: неверная таблица: $(printf '%s' "$got" | tr '\n' ';')" "doctor --md: wrong table: $(printf '%s' "$got" | tr '\n' ';')")"
+  fi
+  got="$(
+    sc_slow() { sleep 1; fail slow; }
+    FMT=text; QUIET=0; ERRORS=0; CHECK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/harness-doctor.XXXXXX")"
+    check_bg slow sc_slow; check_bg fast ok fast
+    check_replay 0 2 2>/dev/null
+    echo "errors=$ERRORS"
+    rm -rf "$CHECK_DIR"
+  )"
+  want="$(printf '%s\n' '  FAIL  slow' '  ok    fast' 'errors=1')"
+  if [ "$got" = "$want" ]; then
+    ok "$(t 'doctor: фоновые проверки выводятся по порядку запуска и учитываются в итоге' 'doctor: background checks are shown in start order and count in the result')"
+  else
+    fail "$(t "doctor: фоновые проверки: $(printf '%s' "$got" | tr '\n' ';')" "doctor: background checks: $(printf '%s' "$got" | tr '\n' ';')")"
+  fi
 }
 
 # The Bash guard reads the text files of gh and of the GitLab commands of harness and refuses AI attribution.

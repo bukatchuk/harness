@@ -2,6 +2,18 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.12.0] — 2026-10-16
+
+### Added
+
+- `bin/harness doctor --md` prints the result as a table with emoji (✅ ⚠️ ❌) and a result line. The `harness-doctor` skill runs `doctor --deep --md` without cutting the output and shows the whole table to the owner in its reply.
+- Progress: while `doctor` runs, stderr shows what is being checked right now (`⏳ SSH <server>…`); in a terminal it is a single line updated in place. Silent with `--quiet` (the session start check).
+
+### Changed
+
+- `doctor --deep` starts the API requests, the origin check and the SSH logins in parallel at the beginning and shows them in the same order as before; `bw status` is called once. A full check takes 12 s instead of 122 s with 8 servers and 6 services.
+- An unknown `doctor` option is now refused with a hint. The checks are in `bin/harness selfcheck`.
+
 ## [1.11.1] — 2026-10-16
 
 ### Fixed
