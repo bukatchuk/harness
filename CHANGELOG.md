@@ -2,6 +2,12 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [semver](https://semver.org/lang/ru/). English: [CHANGELOG.en.md](CHANGELOG.en.md).
 
+## [1.13.2] — 2026-10-18
+
+### Исправлено
+
+- `bin/harness`: CI публичного репозитория снова проходит shellcheck — с 1.12.0 его валили замечания в самопроверке (`-m done` без кавычек, функция через `check_bg`, присвоение `ERRORS` в подоболочке) и `A && B || C` в `mr-status`.
+
 ## [1.13.1] — 2026-10-18
 
 ### Исправлено

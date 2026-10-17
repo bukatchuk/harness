@@ -1475,12 +1475,15 @@ selfcheck_doctor() {
   else
     fail "$(t "doctor --md: неверная таблица: $(printf '%s' "$got" | tr '\n' ';')" "doctor --md: wrong table: $(printf '%s' "$got" | tr '\n' ';')")"
   fi
+  # sc_slow is called through check_bg. Only the errors of this test count (base): assigning ERRORS
+  # inside the subshell trips shellcheck. No comments inside $( ): bash 3.2 misparses an apostrophe there.
+  # shellcheck disable=SC2317,SC2329
   got="$(
     sc_slow() { sleep 1; fail slow; }
-    FMT=text; QUIET=0; ERRORS=0; CHECK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/harness-doctor.XXXXXX")"
+    FMT=text; QUIET=0; base="$ERRORS"; CHECK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/harness-doctor.XXXXXX")"
     check_bg slow sc_slow; check_bg fast ok fast
     check_replay 0 2 2>/dev/null
-    echo "errors=$ERRORS"
+    echo "errors=$((ERRORS - base))"
     rm -rf "$CHECK_DIR"
   )"
   want="$(printf '%s\n' '  FAIL  slow' '  ok    fast' 'errors=1')"
@@ -1586,7 +1589,7 @@ selfcheck_worktree() {
   wt_case 0 "$(t '--remove удаляет ветку без коммитов' '--remove deletes a branch with no commits')" empty
   "${h[@]}" local >/dev/null && "${g[@]}" -C "$tmp/wt/gamma/local" commit -q --allow-empty -m wip
   wt_case 1 "$(t '--remove оставляет ветку с неотправленным коммитом' '--remove keeps a branch with an unpushed commit')" local
-  "${h[@]}" pushed >/dev/null && "${g[@]}" -C "$tmp/wt/gamma/pushed" commit -q --allow-empty -m done && git -C "$tmp/wt/gamma/pushed" push -q origin pushed 2>/dev/null
+  "${h[@]}" pushed >/dev/null && "${g[@]}" -C "$tmp/wt/gamma/pushed" commit -q --allow-empty -m 'done' && git -C "$tmp/wt/gamma/pushed" push -q origin pushed 2>/dev/null
   wt_case 0 "$(t '--remove удаляет отправленную ветку' '--remove deletes a pushed branch')" pushed
   "${h[@]}" squashed >/dev/null
   for c in a b; do echo "$c" > "$tmp/wt/gamma/squashed/$c.txt"; git -C "$tmp/wt/gamma/squashed" add "$c.txt"; "${g[@]}" -C "$tmp/wt/gamma/squashed" commit -q -m "$c"; done
@@ -1916,7 +1919,7 @@ cmd_mr() {
 # mr-status <path> <number> — the pipeline of the request and whether it can be merged.
 cmd_mr_status() {
   local path="${1:-}" iid="${2:-}" res
-  [ -n "$path" ] && [ -n "$iid" ] || { err "использование: bin/harness mr-status <путь> <номер>" "usage: bin/harness mr-status <path> <number>"; return 1; }
+  if [ -z "$path" ] || [ -z "$iid" ]; then err "использование: bin/harness mr-status <путь> <номер>" "usage: bin/harness mr-status <path> <number>"; return 1; fi
   gl_ready "$path" || return 1
   res="$(gl_api "/projects/$(gl_project "$path")/merge_requests/$iid")"
   printf '%s' "$res" | jq -e '.iid' >/dev/null 2>&1 || { gl_fail "$res"; return 1; }

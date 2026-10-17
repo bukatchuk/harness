@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.13.2] — 2026-10-18
+
+### Fixed
+
+- `bin/harness`: the public repository CI passes shellcheck again — since 1.12.0 it was failed by findings in the self-check (unquoted `-m done`, a function called through `check_bg`, assigning `ERRORS` in a subshell) and `A && B || C` in `mr-status`.
+
 ## [1.13.1] — 2026-10-18
 
 ### Fixed
