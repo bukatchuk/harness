@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.13.0] — 2026-10-17
+
+### Added
+
+- Skill `service-remove`: the order of full decommissioning of a service — links, monitoring, the proxy before the certificate, the server (containers, all images, deploy keys, certificate), DNS, a repository copy with a checksum check and final deletion at the code host, the registry, tasks. Tried out on decommissioning one site.
+
 ## [1.12.7] — 2026-10-17
 
 ### Changed
