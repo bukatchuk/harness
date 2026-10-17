@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.13.1] — 2026-10-18
+
+### Fixed
+
+- `bin/harness`: time-limited checks (Docker in `doctor`, `fetch` at session start) no longer make the shell print `Terminated: 15` — the watcher is stopped and reaped. The `fetch_origin` watcher is now stopped too instead of waiting out its limit.
+
 ## [1.13.0] — 2026-10-17
 
 ### Added

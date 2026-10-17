@@ -2,6 +2,12 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [semver](https://semver.org/lang/ru/). English: [CHANGELOG.en.md](CHANGELOG.en.md).
 
+## [1.13.1] — 2026-10-18
+
+### Исправлено
+
+- `bin/harness`: после проверок с ограничением времени (Docker в `doctor`, `fetch` на старте сессии) оболочка больше не печатает `Terminated: 15` — таймер останавливается и дожидается завершения. Таймер `fetch_origin` теперь тоже останавливается, а не ждёт своего срока.
+
 ## [1.13.0] — 2026-10-17
 
 ### Добавлено

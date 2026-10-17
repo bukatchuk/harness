@@ -194,11 +194,20 @@ default_branch() {
 # A normal fetch from the remote over SSH takes 4–5 seconds, so a limit under 10 gives a false "no updates".
 # Returns non-zero when the fetch did not finish or failed.
 fetch_origin() {
-  local secs="${1:-20}" pid
+  local secs="${1:-20}" pid watcher rc
   git -C "$ROOT" fetch --quiet origin >/dev/null 2>&1 &
   pid=$!
   ( sleep "$secs"; kill "$pid" 2>/dev/null ) >/dev/null 2>&1 &
-  wait "$pid" 2>/dev/null
+  watcher=$!
+  wait "$pid" 2>/dev/null; rc=$?
+  stop_watcher "$watcher"
+  return "$rc"
+}
+
+# Stops a time-limit watcher and reaps it: otherwise bash prints "Terminated: 15" for it.
+stop_watcher() {
+  kill "$1" 2>/dev/null
+  { wait "$1"; } 2>/dev/null
 }
 
 version_line() {
@@ -575,7 +584,7 @@ dk() {
   ( sleep "$secs"; kill "$pid" 2>/dev/null ) >/dev/null 2>&1 &
   watcher=$!
   wait "$pid" 2>/dev/null; rc=$?
-  kill "$watcher" 2>/dev/null
+  stop_watcher "$watcher"
   # 143 — SIGTERM from the watcher: the docker client does not exit with it on its own.
   [ "$rc" -eq 143 ] && return 124
   return "$rc"
