@@ -18,7 +18,7 @@ Change the task state in Plane yourself at every stage, without waiting for a re
 
 - **Started work** — move it to `In Progress` immediately, before the first command on the task. This applies to tasks you created yourself too.
 - **Did part** — leave `In Progress` and write a comment: what is done, what remains.
-- **Did everything described in the task and verified the result** — move it to `Done` and write a final comment with numbers "before → after".
+- **Did everything described in the task and verified the result** — check that the repository context and the warm-up prompt are current (`.claude/rules/context.md`), then move it to `Done` and write a final comment with numbers "before → after".
 - **Work stopped** (waiting for the owner's decision, access, an external event) — leave `In Progress` and write in a comment what exactly you are waiting for.
 - **The task is not needed** — `Cancelled` with a reason, only by the owner's decision.
 

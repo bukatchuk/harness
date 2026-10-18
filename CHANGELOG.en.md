@@ -2,6 +2,16 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.14.0] — 2026-10-18
+
+### Added
+
+- The "Project context" rule (`.claude/rules/context.md`): a project's context and the warm-up prompt for starting a session live in the project's repository (`CLAUDE.md`, `.claude/`) and are checked for being current when each task is closed, so that a new session carries on without the owner explaining things again. The warm-up prompt is a short snapshot of "where we are and what is next"; outdated parts are rewritten.
+
+### Changed
+
+- `.claude/rules/tasks.md`: before moving a task to `Done`, check the repository context and the warm-up prompt.
+
 ## [1.13.6] — 2026-10-18
 
 ### Changed
