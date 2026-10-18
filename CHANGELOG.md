@@ -2,6 +2,12 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [semver](https://semver.org/lang/ru/). English: [CHANGELOG.en.md](CHANGELOG.en.md).
 
+## [1.13.4] — 2026-10-18
+
+### Исправлено
+
+- `bin/harness sync` клонирует пустой репозиторий (без единого коммита): раньше клонирование с веткой из реестра падало с «Remote branch main not found». Клон получает HEAD на ветку из реестра, а следующий `sync` после первого коммита в origin создаёт отслеживающую ветку. `bin/harness status` показывает такой клон как «(пустой)», а не `HEAD ? ?`. Проверка — в `tests/smoke.sh`.
+
 ## [1.13.3] — 2026-10-18
 
 ### Изменено

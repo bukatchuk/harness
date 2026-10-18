@@ -888,8 +888,17 @@ cmd_sync() {
     [ -z "$only" ] || [ "$only" = "$name" ] || continue
     dir="$REPOS_DIR/$name"
     if [ ! -d "$dir/.git" ]; then
-      if git clone --quiet ${branch:+--branch "$branch"} "$url" "$dir"; then
-        row "$(t 'клонирован' 'cloned')" "$name"
+      # An empty repository has no branches, and `clone --branch` fails on it: clone it as is and point
+      # HEAD at the registry branch, so the first commit pushed there is picked up by the next sync.
+      if git ls-remote --exit-code --heads "$url" >/dev/null 2>&1; then
+        if git clone --quiet ${branch:+--branch "$branch"} "$url" "$dir"; then
+          row "$(t 'клонирован' 'cloned')" "$name"
+        else
+          row "$(t 'ОШИБКА' 'ERROR')" "$name: $(t "не удалось клонировать $url" "could not clone $url")"; rc=1
+        fi
+      elif git ls-remote "$url" >/dev/null 2>&1 && git clone --quiet "$url" "$dir" 2>/dev/null; then
+        [ -z "$branch" ] || git -C "$dir" symbolic-ref HEAD "refs/heads/$branch"
+        row "$(t 'клонирован' 'cloned')" "$name: $(t 'репозиторий пока пустой' 'the repository is empty so far')"
       else
         row "$(t 'ОШИБКА' 'ERROR')" "$name: $(t "не удалось клонировать $url" "could not clone $url")"; rc=1
       fi
@@ -897,6 +906,17 @@ cmd_sync() {
     fi
     if ! git -C "$dir" fetch --quiet --prune origin; then
       row "$(t 'ОШИБКА' 'ERROR')" "$name: $(t 'fetch не прошёл' 'fetch failed')"; rc=1
+      continue
+    fi
+    # A clone made while the repository was empty: once its branch appears in origin, check it out.
+    if ! git -C "$dir" rev-parse --quiet --verify HEAD >/dev/null; then
+      branch="${branch:-$(git -C "$dir" symbolic-ref --short HEAD 2>/dev/null)}"
+      if [ -n "$branch" ] && git -C "$dir" rev-parse --quiet --verify "refs/remotes/origin/$branch" >/dev/null \
+        && git -C "$dir" checkout --quiet -B "$branch" --track "origin/$branch" 2>/dev/null; then
+        row "$(t 'обновлён' 'updated')" "$name ($branch)"
+      else
+        row "$(t 'пустой' 'empty')" "$name: $(t 'в репозитории ещё нет коммитов' 'the repository has no commits yet')"
+      fi
       continue
     fi
     # Local work is never touched: only a clean tree is updated and only by fast-forward.
@@ -923,6 +943,10 @@ cmd_status() {
       dir="$REPOS_DIR/$name"
       if [ ! -d "$dir/.git" ]; then
         echo "$name${US}$(t 'не склонирован' 'not cloned')${US}-${US}-${US}-"
+        continue
+      fi
+      if ! git -C "$dir" rev-parse --quiet --verify HEAD >/dev/null; then
+        echo "$name${US}$(git -C "$dir" symbolic-ref --short HEAD 2>/dev/null) $(t '(пустой)' '(empty)')${US}-${US}-${US}-"
         continue
       fi
       branch="$(git -C "$dir" rev-parse --abbrev-ref HEAD)"

@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.13.4] — 2026-10-18
+
+### Fixed
+
+- `bin/harness sync` clones an empty repository (no commits yet): cloning with the registry branch used to fail with "Remote branch main not found". The clone gets HEAD on the registry branch, and the next `sync` after the first commit in origin creates the tracking branch. `bin/harness status` shows such a clone as "(empty)" instead of `HEAD ? ?`. Covered in `tests/smoke.sh`.
+
 ## [1.13.3] — 2026-10-18
 
 ### Changed

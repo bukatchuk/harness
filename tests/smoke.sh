@@ -72,6 +72,21 @@ check "status prints a table"               sh -c "'$H' status | grep -q 'REPOSI
 check "servers prints a table"              sh -c "'$H' servers | grep -q 'east.example.com'"
 check "map filters by server"               sh -c "'$H' map west | grep -q site"
 
+echo "Empty repository"
+git init --quiet --bare "$TMP/remote-c.git"
+cp "$BOX/registry/repos.json" "$TMP/repos.json"
+jq --arg c "$TMP/remote-c.git" '.repos += [{name: "charlie", url: $c, branch: "main"}]' "$TMP/repos.json" > "$BOX/registry/repos.json"
+check "sync clones an empty repository"     "$H" sync charlie
+check "its HEAD points at the registry branch" test "$(git -C "$BOX/repos/charlie" symbolic-ref --short HEAD)" = main
+check "status shows it as empty"            sh -c "'$H' status | grep -q 'charlie.*(empty)'"
+git clone --quiet "$TMP/remote-c.git" "$TMP/seed-c" 2>/dev/null
+echo c > "$TMP/seed-c/README.md"
+git -C "$TMP/seed-c" add README.md && git -C "$TMP/seed-c" commit --quiet -m "init" && git -C "$TMP/seed-c" push --quiet origin HEAD:main
+check "sync picks up the first commit"      "$H" sync charlie
+check "the branch tracks origin"            test "$(git -C "$BOX/repos/charlie" rev-parse --abbrev-ref '@{u}')" = origin/main
+check "the file is checked out"             test -f "$BOX/repos/charlie/README.md"
+rm -rf "$BOX/repos/charlie"; cp "$TMP/repos.json" "$BOX/registry/repos.json"
+
 echo "Removal"
 refuse "server-remove refuses a linked server"   "$H" server-remove east
 check  "server-remove --unlink"                  "$H" server-remove east --unlink
