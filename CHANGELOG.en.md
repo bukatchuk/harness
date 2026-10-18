@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.13.3] — 2026-10-18
+
+### Changed
+
+- Settings of this installation: one more token of the secret store for sessions.
+
 ## [1.13.2] — 2026-10-18
 
 ### Fixed

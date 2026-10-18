@@ -2,6 +2,12 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [semver](https://semver.org/lang/ru/). English: [CHANGELOG.en.md](CHANGELOG.en.md).
 
+## [1.13.3] — 2026-10-18
+
+### Изменено
+
+- Настройки этой установки: в хранилище секретов добавлен ещё один токен для сессий.
+
 ## [1.13.2] — 2026-10-18
 
 ### Исправлено
