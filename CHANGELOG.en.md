@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.15.2] — 2026-10-20
+
+### Changed
+
+- `rules/context.md`: the README warm-up block and the snapshot in git are for private repositories only; public ones and forks do not get them.
+
 ## [1.15.1] — 2026-10-20
 
 ### Changed

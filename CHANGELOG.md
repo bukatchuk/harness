@@ -2,6 +2,12 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [semver](https://semver.org/lang/ru/). English: [CHANGELOG.en.md](CHANGELOG.en.md).
 
+## [1.15.2] — 2026-10-20
+
+### Изменено
+
+- `rules/context.md`: блок прогрева в README и снимок в git — только в приватных репозиториях; в публичных и форках их не заводят.
+
 ## [1.15.1] — 2026-10-20
 
 ### Изменено
