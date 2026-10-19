@@ -2,6 +2,16 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.15.0] — 2026-10-20
+
+### Added
+
+- `rules/context.md`: when the owner says "we're working with the <name> repository", the session first reads the warm-up prompt in the repository's `README.md` and follows it.
+
+### Changed
+
+- `rules/context.md`: the warm-up prompt is a short block in `README.md` that points to the state snapshot (`.claude/warmup.md`); no copy of the snapshot is kept in the README.
+
 ## [1.14.3] — 2026-10-18
 
 ### Changed

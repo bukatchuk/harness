@@ -2,6 +2,16 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [semver](https://semver.org/lang/ru/). English: [CHANGELOG.en.md](CHANGELOG.en.md).
 
+## [1.15.0] — 2026-10-20
+
+### Добавлено
+
+- `rules/context.md`: на слова владельца «работаем с репозиторием <имя>» сессия первым делом читает прогревочный промпт в `README.md` репозитория и выполняет его.
+
+### Изменено
+
+- `rules/context.md`: прогревочный промпт — короткий блок в `README.md`, который ведёт на снимок состояния (`.claude/warmup.md`); копию снимка в README не держат.
+
 ## [1.14.3] — 2026-10-18
 
 ### Изменено
