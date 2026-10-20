@@ -2,6 +2,12 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [semver](https://semver.org/lang/ru/). English: [CHANGELOG.en.md](CHANGELOG.en.md).
 
+## [1.15.4] — 2026-10-20
+
+### Изменено
+
+- Реестр этой установки: у проекта указан проект в трекере задач.
+
 ## [1.15.3] — 2026-10-20
 
 ### Изменено
