@@ -216,7 +216,8 @@ The rest — pushes, changes on servers, actions in external services, handling 
     "gitlab": { "url": "https://git.example.com" },
     "mailcow": { "url": "https://mail.example.com" },
     "yandex_cloud": {},
-    "timeweb": {}
+    "timeweb": {},
+    "umami": { "url": "https://analytics.example.com", "script": "script.js" }
   }
 }
 ```
@@ -230,6 +231,7 @@ The rest — pushes, changes on servers, actions in external services, handling 
 | Yandex Cloud | reading resources; changes after a confirmation | the `yc` profile |
 | mailcow | reading domains, mailboxes and aliases; changes after a confirmation | `MAILCOW_TOKEN` |
 | Timeweb Cloud | reading servers, S3 buckets and addresses; creating and deleting only on an explicit instruction | `TW_TOKEN` |
+| Umami | website analytics: adds websites and connects the counter; new projects with open sign-up — under the `analytics` rule | `UMAMI_TOKEN` |
 
 Tokens live in environment variables only. harness checks that they are present but never reads or prints their values.
 

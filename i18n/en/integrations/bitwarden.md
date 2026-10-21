@@ -10,7 +10,7 @@ enabled if `harness.json` has `secrets`:
 - The folder `folder` holds one item per token. The item name equals the variable name (`PLANE_TOKEN`,
   `GITLAB_TOKEN`, …); the value is the password of a Login item or the text of a note.
 - Which tokens are needed follows the enabled integrations (`plane`, `n8n`, `gitguardian`, `mailcow`, `gitlab`,
-  `timeweb`) and the `extra` list.
+  `timeweb`, `umami`) and the `extra` list.
 - The client is the Bitwarden CLI `bw`. It keeps an encrypted copy of the vault on the device: unlocking works
   without the server; the server is needed to log in on a new device and to receive changes.
 

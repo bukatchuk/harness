@@ -216,7 +216,8 @@ bin/harness <команда>
     "gitlab": { "url": "https://git.example.com" },
     "mailcow": { "url": "https://mail.example.com" },
     "yandex_cloud": {},
-    "timeweb": {}
+    "timeweb": {},
+    "umami": { "url": "https://analytics.example.com", "script": "script.js" }
   }
 }
 ```
@@ -230,6 +231,7 @@ bin/harness <команда>
 | Yandex Cloud | чтение ресурсов; изменения — после подтверждения | профиль `yc` |
 | mailcow | чтение доменов, ящиков и алиасов; изменения — после подтверждения | `MAILCOW_TOKEN` |
 | Timeweb Cloud | чтение серверов, бакетов S3 и адресов; создание и удаление — только по явному распоряжению | `TW_TOKEN` |
+| Umami | веб-аналитика сайтов: заводит сайты и подключает счётчик; новые проекты с открытой регистрацией — по правилу `analytics` | `UMAMI_TOKEN` |
 
 Токены живут только в переменных окружения. harness проверяет их наличие, но никогда не читает и не выводит значения.
 

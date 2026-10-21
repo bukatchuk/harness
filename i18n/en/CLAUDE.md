@@ -12,7 +12,7 @@ You work in harness, the single hub for all of the owner's projects. The session
 - `registry/services.json` — links: which repository is responsible for the configuration of which server and which service on it. To view: `bin/harness map <name>`.
 - `.claude/rules/` — universal rules that apply in all projects.
 - `.claude/skills/` — procedures: `commit`, `push`, `pr-create`, `repo-add`, `repo-remove`, `repo-sync`, `server-add`, `server-remove`, `service-add`, `service-remove`, `harness-reset`, `harness-update`, `harness-doctor`, `release-public`.
-- `.claude/integrations/` — cheat sheets for external services (the Bitwarden secret store, Plane, n8n, GitGuardian, GitLab, Yandex Cloud, mailcow, Timeweb Cloud). Read the one you need before first using a service; do not preload them. An integration is enabled if its key is present in `harness.json`.
+- `.claude/integrations/` — cheat sheets for external services (the Bitwarden secret store, Plane, n8n, GitGuardian, GitLab, Yandex Cloud, mailcow, Timeweb Cloud, Umami). Read the one you need before first using a service; do not preload them. An integration is enabled if its key is present in `harness.json`.
 - `i18n/` — the sources of the rules, skills and cheat sheets in Russian and English. The files in `.claude/` are a copy in the selected language; `bin/harness lang` creates it.
 - `bin/harness` — CLI: `init`, `lang`, `doctor`, `sync`, `status`, `servers`, `server-check`, `map`, `repo-remove`, `server-remove`, `service-remove`, `reset`, `check-commits`, `docker-up`, `docker-check`, `docker-clean`, `locks`, `unlock`, `worktree`, `forge`, `mr`, `mr-status`, `release-create`, `task`, `tasks`, `secrets`, `selfcheck`, `release-build`, `release-publish`.
 

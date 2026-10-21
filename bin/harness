@@ -652,6 +652,8 @@ doctor_deep_start() {
   [ -n "$url" ] && [ -n "${GITLAB_TOKEN:-}" ] && check_bg GitLab http_check "GitLab" "${url%/}/api/v4/user" "PRIVATE-TOKEN: $GITLAB_TOKEN"
   url="$(conf '.integrations.mailcow.url')"
   [ -n "$url" ] && [ -n "${MAILCOW_TOKEN:-}" ] && check_bg mailcow http_check "mailcow" "${url%/}/api/v1/get/status/version" "X-API-Key: $MAILCOW_TOKEN"
+  url="$(conf '.integrations.umami.url')"
+  [ -n "$url" ] && [ -n "${UMAMI_TOKEN:-}" ] && check_bg Umami http_check "Umami" "${url%/}/api/me" "Authorization: Bearer $UMAMI_TOKEN"
   integration_on timeweb && [ -n "${TW_TOKEN:-}" ] && check_bg "Timeweb Cloud" http_check "Timeweb Cloud" "https://api.timeweb.cloud/api/v1/account/status" "Authorization: Bearer $TW_TOKEN"
   integration_on gitguardian && [ -n "${GITGUARDIAN_TOKEN:-}" ] && check_bg GitGuardian http_check "GitGuardian" "https://api.gitguardian.com/v1/health" "Authorization: Token $GITGUARDIAN_TOKEN"
   integration_on yandex_cloud && command -v yc >/dev/null 2>&1 && check_bg "Yandex Cloud" yc_check
@@ -766,6 +768,10 @@ cmd_doctor() {
   fi
   if integration_on timeweb; then any=1
     if [ -n "${TW_TOKEN:-}" ]; then ok "TW_TOKEN"; else warn "TW_TOKEN $(t 'не задан в окружении' 'is not set in the environment')"; fi
+  fi
+  if integration_on umami; then any=1
+    if [ -n "${UMAMI_TOKEN:-}" ]; then ok "UMAMI_TOKEN"; else warn "UMAMI_TOKEN $(t 'не задан в окружении' 'is not set in the environment')"; fi
+    [ -n "$(conf '.integrations.umami.url')" ] || fail "$(t 'в harness.json нет integrations.umami.url' 'harness.json has no integrations.umami.url')"
   fi
   if integration_on yandex_cloud && command -v yc >/dev/null 2>&1; then any=1
     if yc config profile list 2>/dev/null | grep -q ' ACTIVE$'; then ok "$(t 'профиль yc' 'yc profile')"; else warn "$(t 'нет активного профиля yc (вход: yc init)' 'no active yc profile (log in: yc init)')"; fi
@@ -1984,7 +1990,7 @@ cmd_release_create() {
 # Token variables of the enabled integrations, one per line, plus secrets.extra from harness.json.
 secret_vars() {
   local i v
-  for i in plane:PLANE_TOKEN n8n:N8N_TOKEN gitguardian:GITGUARDIAN_TOKEN mailcow:MAILCOW_TOKEN gitlab:GITLAB_TOKEN timeweb:TW_TOKEN; do
+  for i in plane:PLANE_TOKEN n8n:N8N_TOKEN gitguardian:GITGUARDIAN_TOKEN mailcow:MAILCOW_TOKEN gitlab:GITLAB_TOKEN timeweb:TW_TOKEN umami:UMAMI_TOKEN; do
     integration_on "${i%%:*}" && echo "${i#*:}"
   done
   conf '.secrets.extra[]?' | while IFS= read -r v; do

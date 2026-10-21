@@ -2,6 +2,13 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.16.0] — 2026-10-22
+
+### Added
+
+- Umami integration (website analytics): cheat sheet `integrations/umami.md`, the `UMAMI_TOKEN` token in the `secrets` and `doctor` commands (presence; with `--deep`, a `/api/me` request), an example in the README.
+- Rule `rules/analytics.md`: every new project with a public website and open sign-up is connected to Umami in the task that releases the website; the counter goes to production only.
+
 ## [1.15.4] — 2026-10-20
 
 ### Changed
