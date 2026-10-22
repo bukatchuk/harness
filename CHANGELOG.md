@@ -2,6 +2,12 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [semver](https://semver.org/lang/ru/). English: [CHANGELOG.en.md](CHANGELOG.en.md).
 
+## [1.16.2] — 2026-10-22
+
+### Изменено
+
+- Шпаргалка GitLab: composer в CI скачивает с GitHub с токеном из переменной `COMPOSER_AUTH`, а в `docker build` получает её только как BuildKit secret ([integrations/gitlab.md](i18n/ru/integrations/gitlab.md)).
+
 ## [1.16.1] — 2026-10-22
 
 ### Изменено

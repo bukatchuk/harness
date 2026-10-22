@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.16.2] — 2026-10-22
+
+### Changed
+
+- GitLab cheat sheet: composer in CI downloads from GitHub with the token from the `COMPOSER_AUTH` variable, and gets it into `docker build` only as a BuildKit secret ([integrations/gitlab.md](i18n/en/integrations/gitlab.md)).
+
 ## [1.16.1] — 2026-10-22
 
 ### Changed

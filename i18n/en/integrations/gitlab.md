@@ -36,5 +36,6 @@ gl "/projects/$p/ci/lint" -X POST -d "$(jq -n --rawfile c .gitlab-ci.yml '{conte
 
 - Reading is free. Creating and deleting projects, groups, branches, tags, CI variables and deploy keys, and merging requests follow the project's rules and need the owner's confirmation.
 - Do not print the values of CI variables. A secret goes into a variable by a command that reads it from its source and passes it straight to the API; the variable is masked and, if only tags need it, protected.
+- Composer in CI downloads from GitHub with a token: the instance-level variable `COMPOSER_AUTH` (masked, not protected — merge request pipelines need it too), its value is in the owner's secret store. Anonymously the runner gets 60 requests an hour and `composer install` hits HTTP 429. In jobs composer reads it from the environment by itself; into `docker build` it goes only as a BuildKit secret (`--secret id=composer_auth,env=COMPOSER_AUTH`, in the Dockerfile `RUN --mount=type=secret,id=composer_auth`), never a build arg — that stays in the image history.
 - Before pushing a new `.gitlab-ci.yml`, check it through `ci/lint`: an error in the file gives a pipeline without a single job.
 - Merge only on a green pipeline when the project requires it (`only_allow_merge_if_pipeline_succeeds`).
