@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.16.3] — 2026-10-22
+
+### Changed
+
+- GitLab cheat sheet: `COMPOSER_AUTH` holds the bare GitHub token, and a project whose CI runs composer wraps it into JSON in `default.before_script` — otherwise composer fails ([integrations/gitlab.md](i18n/en/integrations/gitlab.md)).
+
 ## [1.16.2] — 2026-10-22
 
 ### Changed

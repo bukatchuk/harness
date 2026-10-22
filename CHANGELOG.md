@@ -2,6 +2,12 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [semver](https://semver.org/lang/ru/). English: [CHANGELOG.en.md](CHANGELOG.en.md).
 
+## [1.16.3] — 2026-10-22
+
+### Изменено
+
+- Шпаргалка GitLab: в `COMPOSER_AUTH` лежит голый токен GitHub, и проект, где CI запускает composer, оборачивает его в JSON в `default.before_script` — иначе composer падает ([integrations/gitlab.md](i18n/ru/integrations/gitlab.md)).
+
 ## [1.16.2] — 2026-10-22
 
 ### Изменено
