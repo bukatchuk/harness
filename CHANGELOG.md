@@ -2,6 +2,12 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [semver](https://semver.org/lang/ru/). English: [CHANGELOG.en.md](CHANGELOG.en.md).
 
+## [1.16.4] — 2026-10-23
+
+### Исправлено
+
+- `bin/harness secrets` больше не падает с `unbound variable`, когда в папке хранилища нет записи или нет самой папки, а называет недостающие записи: имя переменной внутри «…» взято в фигурные скобки ([bin/harness](bin/harness)).
+
 ## [1.16.3] — 2026-10-22
 
 ### Изменено

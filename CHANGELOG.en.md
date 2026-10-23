@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.16.4] — 2026-10-23
+
+### Fixed
+
+- `bin/harness secrets` no longer dies with `unbound variable` when the vault folder lacks an item or is missing, and names the missing items instead: the variable inside «…» is now braced ([bin/harness](bin/harness)).
+
 ## [1.16.3] — 2026-10-22
 
 ### Changed

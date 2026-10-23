@@ -2035,7 +2035,7 @@ cmd_secrets() {
   bw sync >/dev/null 2>&1 || err "сервер хранилища недоступен — токены из локальной копии" "the vault server is unreachable — tokens come from the local copy"
   folder="$(conf '.secrets.folder')"; folder="${folder:-harness}"
   fid="$(bw list folders 2>/dev/null | jq -r --arg f "$folder" '.[] | select(.name == $f) | .id' | head -1)"
-  [ -n "$fid" ] || { err "в хранилище нет папки «$folder»" "the vault has no folder \"$folder\""; return 1; }
+  [ -n "$fid" ] || { err "в хранилище нет папки «${folder}»" "the vault has no folder \"$folder\""; return 1; }
   items="$(bw list items --folderid "$fid" 2>/dev/null)" || { err "bw list items не выполнился" "bw list items failed"; return 1; }
   vars="$(secret_vars)"
   for name in $vars; do
@@ -2046,7 +2046,7 @@ cmd_secrets() {
     if [ "$check" -eq 1 ]; then ok "$name"; else printf 'export %s=%q\n' "$name" "$val"; fi
   done
   if [ -n "$missing" ]; then
-    err "в папке «$folder» нет записей:$missing" "the folder \"$folder\" has no items:$missing"
+    err "в папке «${folder}» нет записей:$missing" "the folder \"$folder\" has no items:$missing"
     return 1
   fi
   [ "$check" -eq 0 ] || say "все токены на месте: $found" "all tokens are present: $found"
