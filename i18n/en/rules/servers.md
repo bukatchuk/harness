@@ -27,3 +27,12 @@ The servers harness has access to are listed in `registry/servers.json`. List: `
 - Limit output: `tail -n`, `journalctl -n`, `docker logs --tail`, `grep`. Do not pull whole logs into the context.
 - Do not print secrets from the server: `.env`, private keys, dumps of container environment variables (`docker inspect`, `printenv`). If you need to check a variable, check presence, not the value.
 - Do not copy anything from the server into repositories without the owner's request.
+
+## Maintenance window
+
+This rule applies if `maintenance.window` is set in `harness.json` (time in the `maintenance.timezone` zone).
+
+- Work with downtime that can be postponed waits for the window: reboots for kernels and libraries, Docker Engine updates, updates that restart databases, minor updates of large services. An urgent security fix does not wait for the window — by the owner's decision.
+- Each window gets a task in the tracker. Before the window, fill it from monitoring (servers waiting for a reboot, pending packages) and from open update MRs: server, action, what it affects, rollback.
+- In the window: before the first command — an alert silence, if monitoring has one; servers one at a time, after each — check the services and monitoring targets; servers sharing one role (name servers, VPN) — not at the same time.
+- The "before → after" result goes into the window task; when closing it, open a task for the next window.

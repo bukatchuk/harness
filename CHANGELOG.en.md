@@ -2,6 +2,16 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.17.0] — 2026-10-24
+
+### Added
+
+- "Maintenance window" rule in `servers.md`: postponed work with downtime (reboots, Docker Engine, updates that restart databases) waits for the window; each window gets a task with a list from monitoring and rollbacks, servers one at a time, the result and a task for the next window ([i18n/en/rules/servers.md](i18n/en/rules/servers.md)). The rule applies if `maintenance.window` is set in `harness.json`.
+
+### Changed
+
+- Registry of this installation: a new project.
+
 ## [1.16.6] — 2026-10-24
 
 ### Changed
