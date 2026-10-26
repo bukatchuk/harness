@@ -2,6 +2,16 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.18.0] — 2026-10-26
+
+### Added
+
+- Rule in `secrets.md`: when you ask the owner to create a secret in the vault, add its name to `secrets.extra` in `harness.json` yourself and release a harness version; otherwise the record is in the vault but never reaches the session ([i18n/en/rules/secrets.md](i18n/en/rules/secrets.md)).
+
+### Changed
+
+- Settings of this installation: new secret names in `secrets.extra`.
+
 ## [1.17.0] — 2026-10-24
 
 ### Added
