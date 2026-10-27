@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [semver](https://semver.org/). Русский: [CHANGELOG.md](CHANGELOG.md).
 
+## [1.18.1] — 2026-10-27
+
+### Changed
+
+- Settings of this installation: one more secret name added to `secrets.extra`.
+
 ## [1.18.0] — 2026-10-26
 
 ### Added
